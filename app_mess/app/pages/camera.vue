@@ -7,5 +7,5 @@
 </template>
 
 <script setup lang="ts">
-import CompCamera from '~/app/comp_camera.vue'
+//import CompCamera from '/app/compCamera.vue'
 </script>

@@ -1,171 +1,420 @@
-<template>  <div class="page container">
-    <h1>{{ roomLabel }}</h1>
+<template>
+  <div class="chat-layout">
+    
+    <header class="chat-header">
+      <button class="btn-icon" @click="leaveRoom">⬅️</button>
+      
+      <div class="room-info">
+        <h2>{{ currentRoomName }}</h2>
+        <span class="status-dot"></span> <small>En ligne</small>
+      </div>
 
-    <div class="chat-box" ref="chatBox">
-      <div v-if="messages.length === 0" class="empty">Aucun message pour le moment.</div>
-      <div v-for="m in messages" :key="m.id" :class="['message', { self: m.author === user?.name }]">
-        <template v-if="m.photoData">
-          <img :src="m.photoData" class="msg-photo" />
-          <div v-if="m.text" class="msg-text">{{ m.text }}</div>
-        </template>
-        <template v-else>
-          <div class="msg-meta"><strong>{{ m.author }}</strong> <small>{{ formatTime(m.timestamp) }}</small></div>
-          <div class="msg-text">{{ m.text }}</div>
-        </template>
+      <div class="header-actions">
+        <a href="tel:0600000000" class="btn-icon phone-btn">📞</a>
+        <button class="btn-icon" @click="goToGallery">🖼️</button>
+      </div>
+    </header>
+
+    <div class="messages-container" ref="scrollContainer">
+      <div v-if="roomMessages.length === 0" class="empty-state">
+        <p>👋 C'est calme ici... Dites bonjour !</p>
+      </div>
+
+      <div 
+        v-for="(msg, index) in roomMessages" 
+        :key="index"
+        class="message-wrapper"
+        :class="{ 'my-msg': isMe(msg.author) }"
+      >
+        <div v-if="!isMe(msg.author)" class="avatar-mini">
+           {{ msg.author.charAt(0).toUpperCase() }}
+        </div>
+
+        <div class="message-bubble">
+          <div v-if="!isMe(msg.author)" class="author-name">{{ msg.author }}</div>
+
+          <img 
+            v-if="msg.photo" 
+            :src="msg.photo" 
+            class="msg-image" 
+            @click="openImage(msg.photo)"
+          />
+
+          <p v-if="msg.text">{{ msg.text }}</p>
+
+          <span class="timestamp">{{ formatTime(msg.date) }}</span>
+        </div>
       </div>
     </div>
 
-    <form @submit.prevent="sendMessage" class="form-row">
-      <input v-model="textInput" type="text" placeholder="Écrivez un message..." />
-      <input ref="fileInput" type="file" accept="image/*" capture="environment" @change="onFileChange" />
-      <button class="btn" type="submit">Envoyer</button>
+    <form class="input-area" @submit.prevent="handleSend">
+      <input 
+        ref="fileInput" 
+        type="file" 
+        accept="image/*" 
+        style="display:none" 
+        @change="handleFileSelect"
+      />
+
+      <button type="button" class="btn-attach" @click="triggerFile">
+        📷
+      </button>
+
+      <input 
+        v-model="textInput" 
+        type="text" 
+        placeholder="Message..." 
+        class="msg-input"
+      />
+
+      <button type="submit" class="btn-send" :disabled="!textInput && !pendingImage">
+        ➤
+      </button>
     </form>
 
-    <div style="margin-top:1rem;">
-      <button class="btn" @click="goGallery">Voir la galerie 📸</button>
-      <button class="btn" style="background:#e33" @click="clearRoom">Tout effacer</button>
+    <div v-if="pendingImage" class="image-preview-overlay">
+      <div class="preview-card">
+        <img :src="pendingImage" />
+        <div class="preview-actions">
+          <button @click="pendingImage = null">Annuler</button>
+          <button @click="handleSend" class="confirm">Envoyer</button>
+        </div>
+      </div>
     </div>
+
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useRouter } from '#app';
-
-type Msg = {
-  id: string;
-  author: string;
-  text: string | null;
-  timestamp: string;
-  avatar: string | null;
-  photoData: string | null;
-};
+import { useChatStore } from '~/stores/chat';
 
 const router = useRouter();
-const user = ref<{ name: string; avatar: string | null; room: string | null } | null>(null);
-
-const textInput = ref('');
-const messages = ref<Msg[]>([]);
-const chatBox = ref<HTMLElement | null>(null);
+const chatStore = useChatStore();
+const scrollContainer = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 
-let room = 'general';
-const roomLabel = ref('# Général');
+// État local
+const textInput = ref('');
+const pendingImage = ref<string | null>(null);
 
-function loadUser() {
-  if (process.client) {
-    const raw = localStorage.getItem('chat_user');
-    user.value = raw ? JSON.parse(raw) : { name: 'Invité', avatar: null, room: 'general' };
-    room = user.value?.room || 'general';
-    roomLabel.value = '# ' + (room === 'general' ? 'Général' : room);
-  }
+// On récupère la room active depuis le store (ou par défaut 'general')
+// Note: Idéalement, stocke 'currentRoomId' dans le store lors du login
+const currentRoomId = 'general'; 
+// Astuce: Si tu as géré le localStorage "chat_user" dans la page précédente, 
+// tu devrais plutôt le lire depuis le store ici.
+
+const currentRoomName = computed(() => {
+  const room = chatStore.rooms.find(r => r.id === currentRoomId);
+  return room ? room.name : 'Général';
+});
+
+const roomMessages = computed(() => {
+  return chatStore.messages[currentRoomId] || [];
+});
+
+// --- HELPERS ---
+
+function isMe(authorName: string) {
+  return authorName === chatStore.currentUser?.username;
 }
 
-function storageKey() { return `chat_messages_${room}`; }
-
-function loadMessages() {
-  const raw = localStorage.getItem(storageKey());
-  messages.value = raw ? JSON.parse(raw) : [];
-  // keep chronological order
-  messages.value.sort((a,b) => a.timestamp.localeCompare(b.timestamp));
-  scrollBottom();
-}
-
-function saveMessages() {
-  localStorage.setItem(storageKey(), JSON.stringify(messages.value));
-}
-
-function appendMessage(m: Msg) {
-  messages.value.push(m);
-  saveMessages();
-  scrollBottom();
-}
-
-function sendMessage() {
-  const t = textInput.value.trim();
-  let photoData: string | null = null;
-  // if fileInput has file, we handled in onFileChange which pushes immediately
-  if (!t && !pendingFile.value) return;
-
-  if (pendingFile.value) {
-    photoData = pendingFile.value;
-    pendingFile.value = null;
-  }
-
-  const m: Msg = {
-    id: crypto.randomUUID(),
-    author: user.value?.name || 'Invité',
-    text: t || null,
-    timestamp: new Date().toISOString(),
-    avatar: user.value?.avatar || null,
-    photoData
-  };
-  appendMessage(m);
-
-  if (photoData) {
-    // also add to gallery
-    const gal = JSON.parse(localStorage.getItem('gallery_photos') || '[]');
-    gal.unshift(photoData);
-    localStorage.setItem('gallery_photos', JSON.stringify(gal));
-    notify('Photo ajoutée', 'Votre photo a été enregistrée dans la galerie.');
-  }
-
-  textInput.value = '';
-}
-
-const pendingFile = ref<string | null>(null);
-
-function onFileChange(e: Event) {
-  const input = e.target as HTMLInputElement;
-  if (!input.files || input.files.length === 0) return;
-  const file = input.files[0];
-  const r = new FileReader();
-  r.onload = () => {
-    pendingFile.value = r.result as string;
-    // optionally auto-send when image picked:
-    sendMessage();
-    if (fileInput.value) fileInput.value.value = '';
-  };
-  r.readAsDataURL(file);
-}
-
-function formatTime(ts: string) {
-  const d = new Date(ts);
-  return d.toLocaleString();
+function formatTime(isoString?: string) {
+  if (!isoString) return '';
+  return new Date(isoString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function scrollBottom() {
-  if (chatBox.value) {
-    // nextTick not required; setTimeout small helps ensure DOM update
-    setTimeout(() => chatBox.value!.scrollTop = chatBox.value!.scrollHeight, 50);
+  nextTick(() => {
+    if (scrollContainer.value) {
+      scrollContainer.value.scrollTop = scrollContainer.value.scrollHeight;
+    }
+  });
+}
+
+// Scroll automatique quand un nouveau message arrive
+watch(roomMessages, () => {
+  scrollBottom();
+}, { deep: true });
+
+// --- ACTIONS ---
+
+function leaveRoom() {
+  router.push('/');
+}
+
+function goToGallery() {
+  router.push('/gallery');
+}
+
+function triggerFile() {
+  fileInput.value?.click();
+}
+
+function handleFileSelect(e: Event) {
+  const input = e.target as HTMLInputElement;
+  if (input.files && input.files[0]) {
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      // On affiche la preview au lieu d'envoyer direct
+      pendingImage.value = evt.target?.result as string;
+    };
+    reader.readAsDataURL(input.files[0]);
   }
 }
 
-function goGallery() { router.push('/gallery'); }
+function handleSend() {
+  if (!textInput.value.trim() && !pendingImage.value) return;
 
-function clearRoom() {
-  if (!confirm('Effacer l\'historique de cette room ?')) return;
-  localStorage.removeItem(storageKey());
-  localStorage.removeItem('gallery_photos');
-  messages.value = [];
+  // Envoi via le Store (qui gère Socket + LocalStorage + Vibration)
+  chatStore.sendMessage(
+    currentRoomId, 
+    textInput.value, 
+    pendingImage.value // null si pas d'image
+  );
+
+  // Reset
+  textInput.value = '';
+  pendingImage.value = null;
+  scrollBottom();
 }
 
-async function notify(title: string, body?: string) {
-  if (!('Notification' in window)) return;
-  if (Notification.permission === 'granted') {
-    new Notification(title, { body });
-  } else if (Notification.permission !== 'denied') {
-    const p = await Notification.requestPermission();
-    if (p === 'granted') new Notification(title, { body });
-  }
+function openImage(src: string) {
+  // Bonus: Tu pourrais ouvrir une modale ici
+  console.log("Ouvrir image full screen", src);
 }
 
 onMounted(() => {
-  loadUser();
-  loadMessages();
-});
-
-onBeforeUnmount(() => {
-  // nothing specific
+  // Charge les données si on refresh la page
+  chatStore.init(); 
+  scrollBottom();
 });
 </script>
+
+<style scoped>
+/* --- LAYOUT GLOBAL --- */
+.chat-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh; /* Prend tout l'écran */
+  background-color: #f0f2f5;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* --- HEADER --- */
+.chat-header {
+  flex-shrink: 0;
+  height: 60px;
+  background: white;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+  z-index: 10;
+}
+
+.room-info {
+  flex-grow: 1;
+  margin-left: 10px;
+}
+.room-info h2 {
+  margin: 0;
+  font-size: 1rem;
+  color: #333;
+}
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: #2ecc71;
+  border-radius: 50%;
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  padding: 8px;
+  cursor: pointer;
+  border-radius: 50%;
+}
+.btn-icon:hover { background-color: #f0f0f0; }
+.phone-btn { margin-right: 5px; }
+
+/* --- MESSAGES --- */
+.messages-container {
+  flex-grow: 1;
+  overflow-y: auto;
+  padding: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scroll-behavior: smooth;
+}
+
+.empty-state {
+  text-align: center;
+  color: #888;
+  margin-top: 50px;
+}
+
+.message-wrapper {
+  display: flex;
+  align-items: flex-end;
+  max-width: 80%;
+  margin-bottom: 5px;
+}
+
+/* Message des AUTRES (Aligné gauche, gris) */
+.message-wrapper {
+  align-self: flex-start;
+}
+.message-bubble {
+  background: white;
+  padding: 8px 12px;
+  border-radius: 12px 12px 12px 2px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  position: relative;
+}
+.avatar-mini {
+  width: 28px;
+  height: 28px;
+  background: #ddd;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: bold;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+/* Message de MOI (Aligné droite, bleu) */
+.message-wrapper.my-msg {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+.message-wrapper.my-msg .message-bubble {
+  background: #2563eb; /* Bleu Messenger */
+  color: white;
+  border-radius: 12px 12px 2px 12px;
+}
+.message-wrapper.my-msg .author-name {
+  display: none; /* Pas besoin de mon nom */
+}
+.message-wrapper.my-msg .timestamp {
+  color: rgba(255,255,255,0.7);
+}
+
+/* Contenu des messages */
+.author-name {
+  font-size: 0.75rem;
+  font-weight: bold;
+  color: #e58e26;
+  margin-bottom: 2px;
+}
+.msg-image {
+  max-width: 100%;
+  border-radius: 8px;
+  margin-bottom: 5px;
+  display: block;
+}
+.timestamp {
+  display: block;
+  font-size: 0.65rem;
+  text-align: right;
+  margin-top: 4px;
+  color: #999;
+}
+
+/* --- INPUT BAR --- */
+.input-area {
+  flex-shrink: 0;
+  background: white;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid #eee;
+}
+
+.msg-input {
+  flex-grow: 1;
+  padding: 10px 15px;
+  border-radius: 20px;
+  border: 1px solid #ddd;
+  outline: none;
+  font-size: 1rem;
+}
+.msg-input:focus { border-color: #2563eb; }
+
+.btn-attach {
+  background: none;
+  border: none;
+  font-size: 1.3rem;
+  cursor: pointer;
+  padding: 5px;
+}
+
+.btn-send {
+  background: #2563eb;
+  color: white;
+  border: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+.btn-send:disabled {
+  background: #ccc;
+  cursor: default;
+}
+.btn-send:active:not(:disabled) {
+  transform: scale(0.9);
+}
+
+/* --- PREVIEW OVERLAY --- */
+.image-preview-overlay {
+  position: fixed;
+  top:0; left:0; right:0; bottom:0;
+  background: rgba(0,0,0,0.8);
+  z-index: 100;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.preview-card {
+  background: white;
+  padding: 20px;
+  border-radius: 10px;
+  max-width: 90%;
+  text-align: center;
+}
+.preview-card img {
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+.preview-actions {
+  display: flex;
+  justify-content: space-between;
+}
+.preview-actions button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.confirm {
+  background: #2563eb;
+  color: white;
+}
+</style>

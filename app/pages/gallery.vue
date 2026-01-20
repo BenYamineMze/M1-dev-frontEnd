@@ -106,7 +106,7 @@ const allPhotos = computed(() => {
 
 // Navigation
 function goBack() {
-  router.push('/'); // Ou router.go(-1)
+  router.go(-1); // Ou router.push('/')
 }
 
 function formatTime(d: string) {

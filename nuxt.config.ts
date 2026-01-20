@@ -44,7 +44,8 @@ export default defineNuxtConfig({
       
       // IMPORTANT : Ne pas mettre en cache les appels Socket.IO
       // Sinon ton chat ne marchera pas
-      navigateFallback: '/',
+      //,navigateFallback: '/',
+      navigateFallback: null,
     },
 
     // IMPORTANT : Permet de tester la PWA en local (npm run dev)

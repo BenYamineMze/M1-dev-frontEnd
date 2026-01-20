@@ -5,7 +5,7 @@ import { io, Socket } from 'socket.io-client'
 export default defineNuxtPlugin((nuxtApp) => {
   // 1. Récupération de l'URL du serveur (à mettre dans tes variables d'env plus tard)
   // Remplace par l'URL fournie par ton prof dans l'énoncé Objectif 2
-  const SOCKET_URL = 'https://adresse-du-serveur-du-prof.com' 
+  const SOCKET_URL = 'https://api.tools.gavago.fr' 
 
   // 2. Création de la connexion
   const socket: Socket = io(SOCKET_URL, {

@@ -113,25 +113,26 @@ export const useChatStore = defineStore('chat', {
       })
 
       // QUAND ON REÇOIT UN MESSAGE DU SERVEUR
-      $socket.on('chat-msg', (msg: any) => {
-         // Filtre 1 : On ignore les messages techniques "INFO" (ex: "X a rejoint")
+$socket.on('chat-msg', (msg: any) => {
+         // 1. Filtre anti-spam
          if (msg.categorie === 'INFO') return;
 
-         // Filtre 2 : Est-ce une image ?
-         const isImage = msg.categorie === 'NEW_IMAGE';
+         // 2. DÉTECTION INTELLIGENTE (La correction est ici)
+         // On considère que c'est une image SI :
+         // - Le serveur le dit (NEW_IMAGE)
+         // - OU SI le contenu commence par le code d'une image (data:image)
+         const content = msg.content || '';
+         const isImage = msg.categorie === 'NEW_IMAGE' || content.startsWith('data:image');
          
-         // On formate le message proprement pour notre application
          const formattedMsg: Message = {
-            id: msg.id || Math.random().toString(36), // ID unique
+            id: msg.id || Math.random().toString(36),
             author: msg.pseudo || msg.userId || 'Inconnu',
             
-            // ASTUCE ANTI-BUG D'AFFICHAGE : 
-            // Si c'est une image, on force le texte à vide.
-            // Sinon, on prend le contenu du message.
-            text: isImage ? '' : msg.content, 
+            // Si c'est une image, on VIDE le texte pour ne pas afficher le code bizarre
+            text: isImage ? '' : content, 
             
-            // Si c'est une image, on met le contenu (Base64) dans la case photo
-            photo: isImage ? msg.content : undefined,
+            // Si c'est une image, on met le contenu dans 'photo'
+            photo: isImage ? content : undefined,
             
             date: msg.dateEmis || new Date().toISOString(),
             roomId: msg.roomName || roomName,

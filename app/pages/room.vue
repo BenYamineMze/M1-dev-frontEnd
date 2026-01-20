@@ -1,102 +1,137 @@
 <template>
-  <div class="chat-container">
+  <div class="chat-layout">
+    
     <header class="chat-header">
-      <button class="btn-back" @click="goBack">⬅</button>
+      <button class="btn-icon" @click="leaveRoom">⬅️</button>
+      
       <div class="room-info">
-        <h2>{{ currentRoomName }}</h2>
-        <span class="status-dot"></span>
+        <h2># {{ currentRoomId }}</h2>
+        <span class="status-dot"></span> <small>En ligne</small>
       </div>
-      <div class="user-avatar-mini">
-        <img :src="currentUserPhoto" alt="Moi" />
+
+      <div class="header-actions">
+        <button class="btn-icon" @click="goToGallery">🖼️</button>
       </div>
     </header>
 
-    <div class="messages-area" ref="messagesContainer">
-      <div v-if="messages.length === 0" class="empty-state">
-        👋 Soyez le premier à parler ici !
+    <div class="messages-container" ref="scrollContainer">
+      <div v-if="roomMessages.length === 0" class="empty-state">
+        <p>👋 C'est le début de la discussion dans <strong>{{ currentRoomId }}</strong>.</p>
       </div>
 
-      <div 
-        v-for="msg in messages" 
-        :key="msg.id" 
-        class="message-bubble"
-        :class="{ 'my-message': isMe(msg.author) }"
-      >
-        <div class="msg-header" v-if="!isMe(msg.author)">
-          <span class="author-name">{{ msg.author }}</span>
-        </div>
-
-        <div v-if="msg.photo" class="msg-photo">
-          <img :src="msg.photo" alt="Image envoyée" />
-        </div>
-
-        <p v-if="msg.text" class="msg-text">{{ msg.text }}</p>
+      <template v-for="msg in roomMessages" :key="msg.id">
         
-        <span class="msg-date">{{ formatTime(msg.date) }}</span>
-      </div>
+        <div v-if="msg.isSystem" class="system-message">
+           ℹ️ {{ msg.text }}
+        </div>
+
+        <div 
+          v-else
+          class="message-wrapper"
+          :class="{ 'my-msg': isMe(msg.author) }"
+        >
+          <div v-if="!isMe(msg.author)" class="avatar-mini">
+             {{ msg.author.charAt(0).toUpperCase() }}
+          </div>
+
+          <div class="message-bubble">
+            <div v-if="!isMe(msg.author)" class="author-name">{{ msg.author }}</div>
+
+            <img 
+              v-if="msg.photo" 
+              :src="msg.photo" 
+              class="msg-image" 
+              @click="openImage(msg.photo)"
+            />
+
+            <p v-if="msg.text">{{ msg.text }}</p>
+
+            <span class="timestamp">{{ formatTime(msg.date) }}</span>
+          </div>
+        </div>
+
+      </template>
     </div>
 
-    <div class="input-area">
-      <button class="btn-cam" @click="toggleCam">📸</button>
-      
+    <form class="input-area" @submit.prevent="handleSend">
       <input 
-        v-model="newMessage" 
-        @keyup.enter="sendMessage"
-        type="text" 
-        placeholder="Écrivez un message..." 
+        ref="fileInput" 
+        type="file" 
+        accept="image/*" 
+        capture="environment" 
+        style="display:none" 
+        @change="handleFileSelect"
       />
-      
-      <button class="btn-send" @click="sendMessage">➤</button>
-    </div>
 
-    <div v-if="showCam" class="cam-overlay">
-      <video ref="videoEl" autoplay playsinline></video>
-      <canvas ref="canvasEl" style="display:none"></canvas>
-      <div class="cam-actions">
-        <button class="btn-cancel" @click="stopCam">Annuler</button>
-        <button class="btn-snap" @click="takePhoto"></button>
+      <button type="button" class="btn-attach" @click="triggerFile">
+        📷
+      </button>
+
+      <input 
+        v-model="textInput" 
+        type="text" 
+        placeholder="Message..." 
+        class="msg-input"
+      />
+
+      <button type="submit" class="btn-send" :disabled="!textInput && !pendingImage">
+        ➤
+      </button>
+    </form>
+
+    <div v-if="pendingImage" class="image-preview-overlay">
+      <div class="preview-card">
+        <img :src="pendingImage" />
+        <div class="preview-actions">
+          <button @click="pendingImage = null">Annuler</button>
+          <button @click="handleSend" class="confirm">Envoyer</button>
+        </div>
       </div>
     </div>
+
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUpdated, onBeforeUnmount, nextTick } from 'vue';
-import { useRoute, useRouter } from '#app';
+import { ref, computed, onMounted, onUpdated, nextTick, onBeforeUnmount } from 'vue';
+import { useRoute, useRouter } from '#app'; // Important pour lire l'URL
 import { useChatStore } from '~/stores/chat';
 
 const route = useRoute();
 const router = useRouter();
 const chatStore = useChatStore();
 
-// 1. RÉCUPÉRATION DE L'ID DE LA ROOM DEPUIS L'URL
-// Ex: si l'url est /room/sport, roomId = "sport"
+// --- 1. RÉCUPÉRATION DU NOM DE LA ROOM VIA L'URL ---
+// Si l'url est .../room/sport, alors roomId vaut "sport"
 const roomId = computed(() => (route.params.id as string) || 'general');
 
+// Variables d'état
 const newMessage = ref('');
 const messagesContainer = ref<HTMLElement | null>(null);
 
-// --- GESTION CAMERA ---
+// Variables Caméra
 const showCam = ref(false);
 const videoEl = ref<HTMLVideoElement | null>(null);
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 let stream: MediaStream | null = null;
 
-// --- COMPUTED ---
+// --- DONNÉES ---
+// On récupère les messages DE LA BONNE ROOM
 const messages = computed(() => chatStore.messages[roomId.value] || []);
-const currentUserPhoto = computed(() => chatStore.currentUser?.photo || 'https://via.placeholder.com/50');
-const currentRoomName = computed(() => roomId.value.toUpperCase());
+const currentUser = computed(() => chatStore.currentUser);
 
-// --- LIFECYCLE ---
+// --- CYCLE DE VIE ---
 onMounted(() => {
-  // SÉCURITÉ : Si l'utilisateur n'a pas de pseudo (refresh page), retour accueil
+  // Si pas de pseudo, retour accueil
   if (!chatStore.currentUser) {
     router.push('/');
     return;
   }
 
-  // IMPORTANT : On dit au serveur "Je rentre dans CETTE room là"
+  // CONNEXION À LA BONNE ROOM
+  // C'est ici que la magie opère : on connecte le socket à "sport", "tech", etc.
   chatStore.connectToServer(roomId.value);
+  
   scrollToBottom();
 });
 
@@ -104,19 +139,12 @@ onUpdated(() => {
   scrollToBottom();
 });
 
-// --- ACTIONS ---
+// --- FONCTIONS ---
 function isMe(author: string) {
   return author === chatStore.currentUser?.username;
 }
 
-function formatTime(isoDate: string) {
-  return new Date(isoDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function goBack() {
-  router.push('/');
-}
-
+// Fonction pour scroller en bas automatiquement
 function scrollToBottom() {
   nextTick(() => {
     if (messagesContainer.value) {
@@ -125,25 +153,32 @@ function scrollToBottom() {
   });
 }
 
-// --- ENVOI DE MESSAGE ---
+function goBack() {
+  router.push('/');
+}
+
+// --- ENVOI MESSAGE ---
 function sendMessage() {
   if (!newMessage.value.trim()) return;
 
-  // C'EST ICI QUE TU AVAIS SÛREMENT LE PROBLÈME
-  // On utilise bien "roomId.value" pour envoyer dans la room actuelle
+  // CORRECTION : On envoie dans roomId.value (la room actuelle)
   chatStore.sendMessage(roomId.value, newMessage.value);
-  
-  newMessage.value = ''; // On vide le champ
+  newMessage.value = '';
 }
 
-// --- LOGIQUE CAMERA (Identique à l'accueil) ---
+// --- GESTION CAMERA (Ton code existant) ---
 async function toggleCam() {
-  showCam.value = true;
-  await nextTick();
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    if(videoEl.value) videoEl.value.srcObject = stream;
-  } catch(e) { console.error(e); showCam.value = false; }
+  showCam.value = !showCam.value;
+  if (showCam.value) {
+    await nextTick();
+    try {
+      // facingMode: 'environment' pour la caméra arrière sur mobile, 'user' pour selfie
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+      if(videoEl.value) videoEl.value.srcObject = stream;
+    } catch(e) { console.error(e); showCam.value = false; }
+  } else {
+    stopCam();
+  }
 }
 
 function stopCam() {
@@ -159,9 +194,10 @@ function takePhoto() {
   cvs.height = vid.videoHeight;
   cvs.getContext('2d')?.drawImage(vid, 0, 0);
   
-  // Envoi de la photo
   const photoBase64 = cvs.toDataURL('image/jpeg', 0.7);
-  chatStore.sendMessage(roomId.value, '', photoBase64); // Texte vide, Photo remplie
+  
+  // Envoi de la photo dans la bonne room
+  chatStore.sendMessage(roomId.value, '', photoBase64);
   
   stopCam();
 }
@@ -172,61 +208,101 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* --- STYLE MINIMALISTE & MODERNE --- */
-.chat-container {
-  display: flex; flex-direction: column; height: 100vh; background: #f0f2f5;
+/* --- STYLES IDENTIQUES AVEC AJOUT DU SYSTEM-MSG --- */
+
+.chat-layout {
+  display: flex; flex-direction: column; height: 100vh;
+  background-color: #e5ddd5; font-family: sans-serif;
 }
 
 .chat-header {
-  background: white; padding: 15px; display: flex; align-items: center; justify-content: space-between;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.05); z-index: 10;
+  height: 60px; background: #075e54; color: white;
+  display: flex; align-items: center; padding: 0 10px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
 }
-.room-info h2 { margin: 0; font-size: 1.2rem; }
-.btn-back { border: none; background: none; font-size: 1.5rem; cursor: pointer; }
-.user-avatar-mini img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid #ddd; }
 
-.messages-area {
-  flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px;
+.room-info { flex-grow: 1; margin-left: 15px; }
+.room-info h2 { margin: 0; font-size: 1.1rem; }
+.btn-icon { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: white; }
+
+.messages-container {
+  flex-grow: 1; overflow-y: auto; padding: 15px;
+  display: flex; flex-direction: column; gap: 5px;
+  /* Fond style WhatsApp */
+  background-image: linear-gradient(#e5ddd5 2px, transparent 2px),
+  linear-gradient(90deg, #e5ddd5 2px, transparent 2px),
+  linear-gradient(rgba(255,255,255,.3) 1px, transparent 1px),
+  linear-gradient(90deg, rgba(255,255,255,.3) 1px, transparent 1px);
+  background-size: 100px 100px, 100px 100px, 20px 20px, 20px 20px;
+  background-position:-2px -2px, -2px -2px, -1px -1px, -1px -1px;
 }
-.empty-state { text-align: center; color: #888; margin-top: 50px; }
+
+/* --- NOUVEAU STYLE POUR MESSAGES SYSTÈME --- */
+.system-message {
+  text-align: center;
+  font-size: 0.75rem;
+  color: #555;
+  background-color: rgba(255,255,255,0.6);
+  padding: 4px 10px;
+  border-radius: 10px;
+  align-self: center;
+  margin: 5px 0;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.05);
+}
+
+.message-wrapper {
+  display: flex; max-width: 80%; margin-bottom: 2px;
+}
+.message-wrapper.my-msg {
+  align-self: flex-end; flex-direction: row-reverse;
+}
 
 .message-bubble {
-  max-width: 75%; padding: 10px 15px; border-radius: 18px; position: relative; font-size: 0.95rem;
-  background: white; align-self: flex-start; box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  background: white; padding: 8px 10px; border-radius: 8px;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.1);
 }
-.my-message {
-  align-self: flex-end; background: #0084ff; color: white; border-bottom-right-radius: 4px;
+.my-msg .message-bubble { background: #dcf8c6; }
+
+.avatar-mini {
+  width: 30px; height: 30px; background: #ccc; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 8px; font-weight: bold; color: #555; font-size: 0.8rem;
 }
-.my-message .msg-date { color: rgba(255,255,255,0.8); }
-.msg-photo img { max-width: 100%; border-radius: 10px; margin-top: 5px; }
-.msg-date { font-size: 0.7rem; color: #999; display: block; text-align: right; margin-top: 5px; }
-.author-name { font-size: 0.75rem; color: #666; font-weight: bold; margin-bottom: 4px; display: block; }
+
+.author-name {
+  font-size: 0.75rem; font-weight: bold; color: #d35400; margin-bottom: 4px;
+}
+.msg-image {
+  max-width: 100%; border-radius: 6px; margin-bottom: 5px; display: block;
+}
+.timestamp {
+  display: block; font-size: 0.65rem; text-align: right; color: #999;
+}
 
 .input-area {
-  background: white; padding: 10px; display: flex; gap: 10px; align-items: center;
-  border-top: 1px solid #eee;
+  background: #f0f0f0; padding: 8px; display: flex; gap: 10px; align-items: center;
 }
-.input-area input {
-  flex: 1; padding: 12px; border-radius: 20px; border: 1px solid #ddd; outline: none;
+.msg-input {
+  flex-grow: 1; padding: 10px; border-radius: 20px; border: 1px solid #ccc; outline: none;
 }
-.btn-send, .btn-cam {
-  background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #0084ff;
+.btn-send {
+  background: #075e54; color: white; border: none;
+  width: 40px; height: 40px; border-radius: 50%; cursor: pointer;
 }
+.btn-send:disabled { background: #ccc; }
 
-/* Cam Overlay */
-.cam-overlay {
-  position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: black; z-index: 100;
-  display: flex; flex-direction: column;
+.image-preview-overlay {
+  position: fixed; top:0; left:0; right:0; bottom:0;
+  background: rgba(0,0,0,0.8); z-index: 100;
+  display: flex; align-items: center; justify-content: center;
 }
-.cam-overlay video { width: 100%; flex: 1; object-fit: cover; }
-.cam-actions {
-  height: 100px; display: flex; justify-content: center; align-items: center; gap: 20px;
-  position: absolute; bottom: 20px; width: 100%;
+.preview-card {
+  background: white; padding: 15px; border-radius: 10px; text-align: center; max-width: 90%;
 }
-.btn-snap {
-  width: 70px; height: 70px; border-radius: 50%; background: white; border: 4px solid #ddd;
-}
-.btn-cancel {
-  position: absolute; left: 20px; color: white; background: none; border: none; font-size: 1.2rem;
-}
+.preview-card img { max-width: 100%; max-height: 50vh; margin-bottom: 10px; border-radius: 5px;}
+.preview-actions { display: flex; justify-content: space-around; gap: 10px;}
+.preview-actions button { padding: 8px 20px; border:none; border-radius: 5px; cursor: pointer;}
+.confirm { background: #075e54; color: white; }
+
+
 </style>

@@ -1,0 +1,43 @@
+name: Deploy Nuxt to VPS
+
+on:
+  push:
+    branches:
+      - main  # Vérifie si ta branche s'appelle 'main' ou 'master' !
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install & Build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Copy files to VPS
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_KEY }}
+          source: ".output/"
+          target: "/var/www/chat-pwa"
+
+      - name: Restart Application
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_KEY }}
+          script: |
+            pm2 reload chat-app || pm2 start /var/www/chat-pwa/.output/server/index.mjs --name "chat-app"
+            pm2 save

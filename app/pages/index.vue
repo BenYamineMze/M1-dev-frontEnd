@@ -20,7 +20,7 @@
       <div class="tech-grid">
         <div class="tech-card">
           <span class="icon">💚</span>
-          <h3>Nuxt 3</h3>
+          <h3>Nuxt 4</h3>
           <p>Framework Vue.js pour le rendu et le routing.</p>
         </div>
 

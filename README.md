@@ -1,3 +1,23 @@
+# ChatPWA - Projet Universitaire
+
+Application de chat temps réel progressive (PWA) développée avec Nuxt 4.
+
+## 🚀 Fonctionnalités Techniques
+
+* **Framework** : Nuxt 4 (Vue.js + Vite)
+* **Backend** : Socket.IO (Communication temps réel)
+* **PWA** : Installation sur mobile, fonctionnement hors-ligne (Service Worker)
+* **Hardware APIs** :
+    * 📸 Caméra (Prise de photo avatar et envoi d'images)
+    * 📍 Géolocalisation
+    * 🔋 État de la batterie
+    * 📳 Vibration (Haptique) à la réception de messages
+    * 🔔 Notifications Système
+
+## 🛠 Installation
+
+
+
 # Nuxt Minimal Starter
 
 Look at the [Nuxt documentation](https://nuxt.com/docs/getting-started/introduction) to learn more.

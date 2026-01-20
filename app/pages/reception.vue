@@ -2,7 +2,7 @@
   <div class="page-container">
     <div class="header">
       <h1>Bienvenue 👋</h1>
-      <p class="subtitle">Configurez votre profil pour rejoindre le chat.Ben</p>
+      <p class="subtitle">Configurez votre profil pour rejoindre le chat.</p>
     </div>
 
     <div class="card">
@@ -16,6 +16,18 @@
         />
       </div>
 
+      <div class="hardware-row">
+        <div v-if="battery" class="hw-pill" :class="{ 'charging': battery.charging }">
+          <span class="icon">{{ battery.charging ? '⚡' : '🔋' }}</span>
+          <span>{{ (battery.level * 100).toFixed(0) }}%</span>
+        </div>
+
+        <div class="hw-pill clickable" @click="getGeo" :class="{ 'active': coords }">
+          <span class="icon">📍</span>
+          <span v-if="coords">{{ coords.latitude.toFixed(2) }}, {{ coords.longitude.toFixed(2) }}</span>
+          <span v-else>Me localiser</span>
+        </div>
+      </div>
       <div class="camera-wrapper">
         <div class="viewfinder" :class="{ 'flash-anim': isFlashing }">
           <video 
@@ -58,7 +70,7 @@
       <h3>Choisir un salon</h3>
       
       <div v-if="loading" class="loading-text">
-        ⏳ Récupération des salons...
+        ⏳ Chargement des salons...
       </div>
 
       <div v-else class="rooms-grid">
@@ -94,9 +106,13 @@ const chatStore = useChatStore();
 // --- ETAT ---
 const pseudo = ref('');
 const avatar = ref<string | null>(null);
-const selectedRoom = ref<string>(''); // Vide par défaut
+const selectedRoom = ref<string>(''); 
 const isFlashing = ref(false);
-const loading = ref(true); // Pour savoir si on attend l'API
+const loading = ref(true);
+
+// --- HARDWARE STATE ---
+const battery = ref<any>(null);
+const coords = ref<GeolocationCoordinates | null>(null);
 
 // --- CAMERA VARS ---
 const videoEl = ref<HTMLVideoElement | null>(null);
@@ -107,26 +123,50 @@ const showVideo = ref(false);
 
 // --- INITIALISATION ---
 onMounted(async () => {
-  // 1. On lance la récupération API via le Store
+  // 1. Appel API Rooms
   await chatStore.fetchRooms();
   loading.value = false;
 
-  // 2. Sélection par défaut (la première room de la liste)
+  // 2. Sélection auto
   if (chatStore.rooms.length > 0) {
     selectedRoom.value = chatStore.rooms[0].id;
   }
 
-  // 3. Restaurer le pseudo si déjà là
+  // 3. Restaurer user
   if (chatStore.currentUser?.username) {
     pseudo.value = chatStore.currentUser.username;
   }
+
+  // 4. Initialiser Batterie (API Hardware)
+  initBattery();
 });
+
+// --- LOGIQUE HARDWARE ---
+function initBattery() {
+  if ('getBattery' in navigator) {
+    (navigator as any).getBattery().then((batt: any) => {
+      battery.value = batt;
+      batt.addEventListener('levelchange', () => { battery.value = batt; });
+      batt.addEventListener('chargingchange', () => { battery.value = batt; });
+    });
+  }
+}
+
+function getGeo() {
+  if (!navigator.geolocation) {
+    alert("Géolocalisation non supportée");
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => { coords.value = pos.coords; },
+    (err) => { alert("Impossible de vous localiser (Autorisation refusée ?)"); }
+  );
+}
 
 const isFormValid = computed(() => {
   return pseudo.value.trim().length > 0 && avatar.value !== null && selectedRoom.value;
 });
 
-// Petite fonction pour donner des icônes selon le nom du salon
 function getRoomIcon(name: string) {
   const lowerName = name.toLowerCase();
   if (lowerName.includes('general')) return '💬';
@@ -134,10 +174,10 @@ function getRoomIcon(name: string) {
   if (lowerName.includes('game') || lowerName.includes('jeu')) return '🎮';
   if (lowerName.includes('music')) return '🎵';
   if (lowerName.includes('sport')) return '⚽';
-  return '📢'; // Icône par défaut
+  return '📢';
 }
 
-// --- LOGIQUE CAMERA (Ton code original) ---
+// --- LOGIQUE CAMERA (Inchangée) ---
 async function startCamera() {
   if (!import.meta.client) return;
   avatar.value = null;
@@ -200,13 +240,8 @@ function retake() {
 function login() {
   if (!isFormValid.value) return;
 
-  // 1. Sauvegarde Store
   chatStore.setUser(pseudo.value, avatar.value!);
-  
-  // 2. Connexion Spécifique à la Room choisie
   chatStore.connectToServer(selectedRoom.value);
-
-  // 3. Navigation dynamique
   router.push(`/room/${selectedRoom.value}`);
 }
 
@@ -216,7 +251,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* --- TON CSS ORIGINAL (INCHANGÉ) --- */
+/* --- STYLES ORIGINAUX --- */
 .page-container {
   max-width: 600px;
   margin: 0 auto;
@@ -234,13 +269,27 @@ onBeforeUnmount(() => {
   box-shadow: 0 10px 30px -10px rgba(0,0,0,0.1); margin-bottom: 2rem;
 }
 
-.form-group { margin-bottom: 1.5rem; }
+.form-group { margin-bottom: 1rem; }
 .form-group label { display: block; font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem; color: #444; }
 .input-modern {
   width: 100%; padding: 12px 15px; border: 2px solid #eee; border-radius: 12px;
   font-size: 1rem; transition: all 0.3s; background: #f9f9f9; box-sizing: border-box;
 }
 .input-modern:focus { border-color: #2563eb; background: white; outline: none; }
+
+/* --- NOUVEAU STYLE HARDWARE --- */
+.hardware-row {
+  display: flex; gap: 10px; margin-bottom: 1.5rem; justify-content: center;
+}
+.hw-pill {
+  background: #f1f2f6; border-radius: 20px; padding: 6px 12px;
+  font-size: 0.8rem; font-weight: 600; color: #555;
+  display: flex; align-items: center; gap: 6px; transition: all 0.2s;
+}
+.hw-pill.charging { background: #e3f2fd; color: #2196f3; border: 1px solid #bbdefb; }
+.hw-pill.clickable { cursor: pointer; border: 1px solid transparent; }
+.hw-pill.clickable:hover { background: #e9ecef; }
+.hw-pill.active { background: #d4edda; color: #155724; border-color: #c3e6cb; }
 
 .camera-wrapper { display: flex; flex-direction: column; align-items: center; gap: 1rem; }
 .viewfinder {
@@ -277,7 +326,7 @@ onBeforeUnmount(() => {
 .fixed-bottom {
   position: fixed; bottom: 0; left: 0; width: 100%; padding: 20px;
   background: linear-gradient(to top, white 80%, transparent); text-align: center; z-index: 10;
-  box-sizing: border-box; /* Important pour éviter le dépassement */
+  box-sizing: border-box;
 }
 .btn-main {
   width: 100%; max-width: 500px; background: #2563eb; color: white; border: none;

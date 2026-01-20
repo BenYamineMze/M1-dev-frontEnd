@@ -3,7 +3,7 @@ name: Deploy Nuxt to VPS
 on:
   push:
     branches:
-      - main  # Vérifie si ta branche s'appelle 'main' ou 'master' !
+      - main  # branche 'main' ou 'master' !
 
 jobs:
   deploy:

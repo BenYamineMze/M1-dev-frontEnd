@@ -1,7 +1,7 @@
 <template>
   <div class="page-container">
     <div class="header">
-      <h1>Bienvenue 👋</h1>
+      <h1>KARIBU 👋</h1>
       <p class="subtitle">Configurez votre profil pour rejoindre le chat.</p>
     </div>
 

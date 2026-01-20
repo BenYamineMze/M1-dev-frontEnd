@@ -55,6 +55,7 @@ export const useChatStore = defineStore('chat', {
         
         // 1. Requête HTTP vers l'API du professeur
         // Note : On utilise l'URL correcte identifiée (avec /socketio/api)
+        // - L'URL correcte pour l'API est confirmée comme étant https://api.tools.gavago.fr/socketio/api/rooms
         const response = await fetch('https://api.tools.gavago.fr/socketio/api/rooms');
         
         // 2. SÉCURITÉ : Vérification du type de contenu
@@ -113,25 +114,20 @@ export const useChatStore = defineStore('chat', {
       const { $socket } = useNuxtApp() // On récupère l'instance du plugin Socket.io
       const myPseudo = this.currentUser?.username || 'Anonyme'
       
-      // Si on est déjà connecté, on change juste de salle sans relancer la connexion
-      if ($socket.connected) {
-         $socket.emit('chat-join-room', { pseudo: myPseudo, roomName });
-         return;
-      }
-
-      // NETTOYAGE : On supprime les anciens écouteurs pour éviter les doublons d'événements
+      // NETTOYAGE CRITIQUE : On supprime les anciens écouteurs pour éviter les doublons d'événements.
+      // Si on ne fait pas ça, changer de room crée des écouteurs multiples.
       $socket.offAny(); 
       
-      // On lance la connexion
-      $socket.connect()
+      // Si le socket n'est pas connecté, on le connecte
+      if (!$socket.connected) {
+        $socket.connect()
+      }
 
-      // Événement : Connexion réussie
-      $socket.on('connect', () => {
-        this.isConnected = true
-        console.log(`🟢 Connecté au serveur ! Room cible : ${roomName}`);
-        // On signale notre présence au serveur
-        $socket.emit('chat-join-room', { pseudo: myPseudo, roomName })
-      })
+      // On rejoint la room immédiatement
+      // Note: emit peut être fait même si on est déjà connecté
+      $socket.emit('chat-join-room', { pseudo: myPseudo, roomName });
+      this.isConnected = true;
+      console.log(`🟢 Connecté au serveur ! Room cible : ${roomName}`);
 
       // Événement : Réception d'un message
       $socket.on('chat-msg', (msg: any) => {

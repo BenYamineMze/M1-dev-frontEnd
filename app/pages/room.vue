@@ -8,47 +8,55 @@
         <h2># {{ currentRoomId }}</h2>
         <span class="status-dot"></span> <small>En ligne</small>
       </div>
+
+      <div class="header-actions">
+        <button class="btn-icon" @click="goToGallery" title="Voir la galerie">
+          🖼️
+        </button>
+      </div>
     </header>
 
     <div class="messages-container" ref="messagesContainer">
-      
       <div v-if="messages.length === 0" class="empty-state">
         <p>👋 C'est le début de la discussion dans <strong>{{ currentRoomId }}</strong>.</p>
       </div>
 
       <template v-for="msg in messages" :key="msg.id">
-        
-        <div v-if="msg.isSystem" class="system-message">
-           ℹ️ {{ msg.text }}
-        </div>
+        <div v-if="msg.isSystem" class="system-message">ℹ️ {{ msg.text }}</div>
 
-        <div 
-          v-else
-          class="message-wrapper"
-          :class="{ 'my-msg': isMe(msg.author) }" 
-        >
+        <div v-else class="message-wrapper" :class="{ 'my-msg': isMe(msg.author) }">
           <div v-if="!isMe(msg.author)" class="avatar-mini">
              {{ msg.author.charAt(0).toUpperCase() }}
           </div>
-
           <div class="message-bubble">
             <div v-if="!isMe(msg.author)" class="author-name">{{ msg.author }}</div>
-
+            
             <div v-if="msg.photo" class="msg-image-container">
               <img :src="msg.photo" class="msg-image" alt="Image envoyée" />
             </div>
-
+            
             <p v-if="msg.text" class="msg-text">{{ msg.text }}</p>
-
             <span class="timestamp">{{ formatTime(msg.date) }}</span>
           </div>
         </div>
-
       </template>
     </div>
 
     <div class="input-area">
-      <button type="button" class="btn-icon-cam" @click="toggleCam">
+      
+      <input 
+        type="file" 
+        ref="fileInput" 
+        accept="image/*" 
+        style="display: none" 
+        @change="handleFileSelect"
+      />
+
+      <button type="button" class="btn-icon-action" @click="triggerFile" title="Choisir une image">
+        📁
+      </button>
+
+      <button type="button" class="btn-icon-action" @click="toggleCam" title="Prendre une photo">
         📷
       </button>
 
@@ -67,9 +75,7 @@
 
     <div v-if="showCam" class="cam-overlay">
       <video ref="videoEl" autoplay playsinline class="cam-video"></video>
-      
       <canvas ref="canvasEl" style="display:none"></canvas>
-      
       <div class="cam-controls">
         <button class="btn-cancel" @click="stopCam">Annuler</button>
         <button class="btn-snap" @click="takePhoto"></button>
@@ -84,273 +90,171 @@ import { ref, computed, onMounted, onUpdated, nextTick, onBeforeUnmount } from '
 import { useRoute, useRouter } from '#app';
 import { useChatStore } from '~/stores/chat';
 
-// --- INITIALISATION DES OUTILS ---
-const route = useRoute();   // Pour lire l'URL actuelle
-const router = useRouter(); // Pour changer de page
-const chatStore = useChatStore(); // Pour accéder aux données globales (Pinia)
+const route = useRoute();
+const router = useRouter();
+const chatStore = useChatStore();
 
-// --- 1. LOGIQUE ROOM DYNAMIQUE ---
-// On récupère l'ID depuis l'URL (ex: /room/sport -> id = sport)
-// Si pas d'ID, on met 'general' par sécurité.
+// --- 1. DONNÉES ---
 const currentRoomId = computed(() => (route.params.id as string) || 'general');
-
-// --- 2. VARIABLES RÉACTIVES (STATE LOCAL) ---
-const newMessage = ref(''); // Ce que l'utilisateur tape
-const messagesContainer = ref<HTMLElement | null>(null); // Référence vers la div de scroll
-
-// Variables techniques pour la caméra
-const showCam = ref(false); // Est-ce que la caméra est ouverte ?
-const videoEl = ref<HTMLVideoElement | null>(null); // Lien vers la balise <video>
-const canvasEl = ref<HTMLCanvasElement | null>(null); // Lien vers la balise <canvas>
-let stream: MediaStream | null = null; // Stocke le flux brut de la caméra
-
-// --- 3. CONNEXION AUX DONNÉES DU STORE ---
-// On demande au store : "Donne-moi uniquement les messages de la room actuelle"
-// 'computed' assure que si un nouveau message arrive, la liste se met à jour toute seule.
 const messages = computed(() => chatStore.messages[currentRoomId.value] || []);
+const newMessage = ref('');
+const messagesContainer = ref<HTMLElement | null>(null);
 
-// --- 4. CYCLE DE VIE (LIFECYCLE) ---
+// Variables Caméra & Fichier
+const showCam = ref(false);
+const videoEl = ref<HTMLVideoElement | null>(null);
+const canvasEl = ref<HTMLCanvasElement | null>(null);
+const fileInput = ref<HTMLInputElement | null>(null); // Référence vers l'input caché
+let stream: MediaStream | null = null;
 
-// Au chargement de la page...
+// --- 2. LIFECYCLE ---
 onMounted(() => {
-  // SÉCURITÉ : Si l'utilisateur a rafraîchi la page et perdu son pseudo
-  if (!chatStore.currentUser) {
-    router.push('/'); // On le renvoie à l'accueil
-    return;
-  }
-  
-  // ACTION CRUCIALE : On dit au serveur Socket.IO "Connecte-moi à CETTE room spécifique"
+  if (!chatStore.currentUser) { router.push('/'); return; }
   chatStore.connectToServer(currentRoomId.value);
-  
-  // On scroll tout en bas pour voir les derniers messages
   scrollToBottom();
 });
 
-// À chaque fois que le composant se met à jour (nouveau message)...
-onUpdated(() => {
-  scrollToBottom();
-});
+onUpdated(() => scrollToBottom());
+onBeforeUnmount(() => stopCam());
 
-// Quand on quitte la page...
-onBeforeUnmount(() => {
-  stopCam(); // On n'oublie pas d'éteindre la caméra pour économiser la batterie
-});
+// --- 3. ACTIONS NAVIGATION ---
+function leaveRoom() { router.push('/'); }
 
-// --- 5. FONCTIONS MÉTIER ---
-
-// Retour à l'accueil
-function leaveRoom() {
-  router.push('/');
+// NOUVEAU : Fonction pour aller à la galerie
+function goToGallery() {
+  // Tu devras créer cette page "pages/gallery.vue" ou adapter le lien
+  router.push('/gallery'); 
+  // Si la page n'existe pas encore, tu peux mettre un alert pour tester :
+  // alert("Vers la galerie (Page à créer)");
 }
 
-// Vérifie si le message vient de moi (pour l'afficher à droite en vert)
-function isMe(author: string) {
-  return author === chatStore.currentUser?.username;
-}
-
-// Formate la date ISO (2023-10-01T12:00:00) en heure lisible (12:00)
-function formatTime(isoDate: string) {
-  if (!isoDate) return '';
-  return new Date(isoDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-// Fonction utilitaire pour scroller en bas de la div
+// --- 4. LOGIQUE MESSAGES ---
+function isMe(author: string) { return author === chatStore.currentUser?.username; }
+function formatTime(isoDate: string) { return isoDate ? new Date(isoDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''; }
 function scrollToBottom() {
-  nextTick(() => { // nextTick attend que le DOM soit mis à jour par Vue
-    if (messagesContainer.value) {
-      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
-    }
+  nextTick(() => {
+    if (messagesContainer.value) messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
   });
 }
 
-// --- 6. ENVOI DE MESSAGE ---
-
 function sendMessage() {
-  // Vérification : Pas de message vide
   if (!newMessage.value.trim()) return;
-  
-  // Appel au Store pour envoyer le message au serveur
   chatStore.sendMessage(currentRoomId.value, newMessage.value);
-  
-  // On vide le champ de saisie
   newMessage.value = '';
 }
 
-// --- 7. LOGIQUE CAMÉRA (AVANCÉ) ---
+// --- 5. LOGIQUE FICHIER (PC/UPLOAD) ---
 
+// Fonction qui simule un clic sur l'input caché
+function triggerFile() {
+  fileInput.value?.click();
+}
+
+// Fonction appelée quand l'utilisateur a choisi une image
+function handleFileSelect(event: Event) {
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0]; // On prend le premier fichier
+
+  if (file) {
+    // On utilise FileReader pour lire le fichier et le convertir en Base64
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      const base64String = e.target?.result as string;
+      // On envoie direct (comme pour la caméra)
+      chatStore.sendMessage(currentRoomId.value, '', base64String);
+    };
+    
+    reader.readAsDataURL(file); // Lance la lecture
+  }
+  
+  // On reset l'input pour pouvoir ré-uploader le même fichier si besoin
+  target.value = '';
+}
+
+// --- 6. LOGIQUE CAMÉRA (LIVE) ---
 async function toggleCam() {
   showCam.value = true;
-  await nextTick(); // On attend que la balise <video> apparaisse
-  
+  await nextTick();
   try {
-    // API NAVIGATEUR : On demande l'accès à la caméra
-    // facingMode: 'environment' cherche la caméra arrière sur mobile
-    stream = await navigator.mediaDevices.getUserMedia({ 
-      video: { facingMode: 'environment' } 
-    });
-    
-    // On branche le flux caméra directement dans la balise <video>
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
     if(videoEl.value) videoEl.value.srcObject = stream;
-  } catch(e) { 
-    console.error("Erreur caméra:", e); 
-    showCam.value = false;
-    alert("Impossible d'accéder à la caméra (Vérifiez les permissions HTTPS).");
-  }
+  } catch(e) { console.error(e); showCam.value = false; alert("Erreur caméra"); }
 }
-
-// Éteint la caméra proprement
 function stopCam() {
-  if(stream) {
-    // On arrête toutes les pistes (tracks) vidéo
-    stream.getTracks().forEach(t => t.stop());
-  }
-  stream = null;
-  showCam.value = false;
+  if(stream) stream.getTracks().forEach(t => t.stop());
+  stream = null; showCam.value = false;
 }
-
-// Prend la photo
 function takePhoto() {
   if(!videoEl.value || !canvasEl.value) return;
-  
   const vid = videoEl.value;
   const cvs = canvasEl.value;
-  
-  // 1. On configure le canvas à la taille de la vidéo
-  cvs.width = vid.videoWidth;
-  cvs.height = vid.videoHeight;
-  
-  // 2. On "dessine" l'image actuelle de la vidéo sur le canvas
+  cvs.width = vid.videoWidth; cvs.height = vid.videoHeight;
   const ctx = cvs.getContext('2d');
   if(ctx) ctx.drawImage(vid, 0, 0);
-  
-  // 3. On convertit le dessin en chaîne de caractères Base64 (image/jpeg)
-  const photoBase64 = cvs.toDataURL('image/jpeg', 0.7); // Qualité 0.7 (compression)
-  
-  // 4. On envoie via le socket
-  // Note : On envoie un texte vide (''), car le 3ème argument est la photo
+  const photoBase64 = cvs.toDataURL('image/jpeg', 0.7);
   chatStore.sendMessage(currentRoomId.value, '', photoBase64);
-  
-  // 5. On ferme la caméra
   stopCam();
 }
 </script>
 
 <style scoped>
-/* --- LAYOUT GLOBAL --- */
+/* --- LAYOUT --- */
 .chat-layout {
-  display: flex; flex-direction: column; 
-  height: 100vh; 
-  height: 100dvh; /* dvh = Dynamic Viewport Height (mieux pour mobile) */
-  background-color: #e5ddd5; 
-  font-family: -apple-system, sans-serif;
-  overflow: hidden; /* Pas de scroll global, seulement dans les messages */
+  display: flex; flex-direction: column; height: 100vh; height: 100dvh;
+  background-color: #e5ddd5; font-family: -apple-system, sans-serif; overflow: hidden;
 }
 
 /* --- HEADER --- */
 .chat-header {
-  flex-shrink: 0; /* Ne doit pas rétrécir */
-  height: 60px; background: #075e54; color: white;
+  flex-shrink: 0; height: 60px; background: #075e54; color: white;
   display: flex; align-items: center; padding: 0 10px;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.1); z-index: 10;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1); z-index: 10; justify-content: space-between;
 }
 .room-info { flex-grow: 1; margin-left: 15px; }
-.btn-icon { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: white; }
+.room-info h2 { margin: 0; font-size: 1.1rem; }
+.btn-icon { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: white; padding: 0 10px; }
 
-/* --- MESSAGES CONTAINER --- */
+/* --- MESSAGES --- */
 .messages-container {
-  flex-grow: 1; /* Prend tout l'espace restant */
-  overflow-y: auto; /* Active le scroll vertical */
-  padding: 15px;
-  display: flex; flex-direction: column; gap: 8px;
-  
-  /* Fond texturé style WhatsApp avec CSS gradients */
-  background-color: #e5ddd5;
-  background-image: linear-gradient(#d4c6b8 1px, transparent 1px), linear-gradient(90deg, #d4c6b8 1px, transparent 1px);
-  background-size: 20px 20px;
-  
-  /* Scroll fluide sur iOS */
+  flex-grow: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 8px;
+  background-color: #e5ddd5; background-image: linear-gradient(#d4c6b8 1px, transparent 1px), linear-gradient(90deg, #d4c6b8 1px, transparent 1px); background-size: 20px 20px;
   -webkit-overflow-scrolling: touch;
 }
+.empty-state { text-align: center; color: #888; background: rgba(255,255,255,0.8); padding: 10px; border-radius: 8px; align-self: center; margin-top: 20px; }
+.system-message { text-align: center; font-size: 0.75rem; background: #dcf8c6; padding: 4px 12px; border-radius: 12px; align-self: center; margin: 10px 0; color: #555; }
 
-/* --- STYLES DES BULLES --- */
-.message-wrapper {
-  display: flex; max-width: 85%; align-items: flex-end;
-}
-/* Si c'est mon message : alignement à droite et ordre inversé */
-.message-wrapper.my-msg {
-  align-self: flex-end; flex-direction: row-reverse;
-}
-
-.avatar-mini {
-  width: 28px; height: 28px; background: #bdc3c7; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  margin: 0 8px; font-weight: bold; color: white; font-size: 0.8rem;
-  flex-shrink: 0;
-}
-
-.message-bubble {
-  background: white; padding: 8px 10px; border-radius: 8px;
-  box-shadow: 0 1px 1px rgba(0,0,0,0.1); position: relative;
-  min-width: 80px;
-}
-/* Couleur verte pour mes messages */
+/* --- BULLES --- */
+.message-wrapper { display: flex; max-width: 85%; align-items: flex-end; }
+.message-wrapper.my-msg { align-self: flex-end; flex-direction: row-reverse; }
+.avatar-mini { width: 28px; height: 28px; background: #bdc3c7; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 8px; color: white; font-size: 0.8rem; font-weight: bold; flex-shrink: 0; }
+.message-bubble { background: white; padding: 8px 10px; border-radius: 8px; box-shadow: 0 1px 1px rgba(0,0,0,0.1); position: relative; min-width: 80px; }
 .my-msg .message-bubble { background: #dcf8c6; }
-
-.author-name {
-  font-size: 0.75rem; font-weight: bold; color: #e67e22; margin-bottom: 4px;
-}
-.msg-image {
-  max-width: 100%; border-radius: 6px; margin-bottom: 5px; display: block;
-}
+.author-name { font-size: 0.75rem; font-weight: bold; color: #e67e22; margin-bottom: 4px; }
+.msg-image { max-width: 100%; border-radius: 6px; margin-bottom: 5px; display: block; }
 .msg-text { margin: 0; font-size: 0.95rem; line-height: 1.4; color: #333; }
-.timestamp {
-  display: block; font-size: 0.65rem; text-align: right; color: #999; margin-top: 4px;
-}
-.system-message {
-  text-align: center; font-size: 0.75rem; color: #555;
-  background-color: #dcf8c6; padding: 4px 12px; border-radius: 12px;
-  align-self: center; margin: 10px 0;
-}
+.timestamp { display: block; font-size: 0.65rem; text-align: right; color: #999; margin-top: 4px; }
 
 /* --- INPUT AREA --- */
 .input-area {
-  flex-shrink: 0; background: #f0f0f0; padding: 8px 10px; display: flex; gap: 10px; align-items: center;
-  /* padding-bottom pour éviter que la barre de l'iPhone X cache l'input */
-  padding-bottom: env(safe-area-inset-bottom); 
+  flex-shrink: 0; background: #f0f0f0; padding: 8px 10px; display: flex; gap: 8px; align-items: center;
+  padding-bottom: env(safe-area-inset-bottom);
 }
+/* Style commun pour les boutons (Dossier et Caméra) */
+.btn-icon-action {
+  background: none; border: none; font-size: 1.5rem; cursor: pointer; padding: 5px; 
+  transition: transform 0.1s;
+}
+.btn-icon-action:active { transform: scale(0.9); }
 
-.btn-icon-cam {
-  background: none; border: none; font-size: 1.5rem; cursor: pointer; padding: 5px;
-}
-
-.msg-input {
-  flex-grow: 1; padding: 10px 15px; border-radius: 20px; border: none; outline: none;
-  font-size: 1rem; background: white;
-}
-
-.btn-send {
-  background: #075e54; color: white; border: none;
-  width: 40px; height: 40px; border-radius: 50%; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 1.2rem;
-}
+.msg-input { flex-grow: 1; padding: 10px 15px; border-radius: 20px; border: none; outline: none; font-size: 1rem; background: white; }
+.btn-send { background: #075e54; color: white; border: none; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; }
 .btn-send:disabled { background: #ccc; cursor: default; }
 
-/* --- OVERLAY CAMERA --- */
-.cam-overlay {
-  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  background: black; z-index: 100; display: flex; flex-direction: column;
-}
+/* --- CAM OVERLAY --- */
+.cam-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: black; z-index: 100; display: flex; flex-direction: column; }
 .cam-video { width: 100%; flex: 1; object-fit: cover; }
-.cam-controls {
-  height: 100px; display: flex; align-items: center; justify-content: center;
-  position: relative; background: rgba(0,0,0,0.5);
-}
-.btn-snap {
-  width: 70px; height: 70px; border-radius: 50%; background: white;
-  border: 4px solid #ccc; cursor: pointer;
-}
-.btn-cancel {
-  position: absolute; left: 20px; color: white; background: none; border: none; font-size: 1rem; cursor: pointer;
-}
+.cam-controls { height: 100px; display: flex; align-items: center; justify-content: center; position: relative; background: rgba(0,0,0,0.5); }
+.btn-snap { width: 70px; height: 70px; border-radius: 50%; background: white; border: 4px solid #ccc; cursor: pointer; }
+.btn-cancel { position: absolute; left: 20px; color: white; background: none; border: none; font-size: 1rem; cursor: pointer; }
 </style>

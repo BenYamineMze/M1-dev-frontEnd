@@ -31,37 +31,52 @@ export const useChatStore = defineStore('chat', {
   actions: {
     // --- 2. RÉCUPÉRER LES SALONS (API REST) ---
     // Cette fonction est appelée au chargement de la page d'accueil (Reception)
+    // --- DANS STORES/CHAT.TS ---
+
     async fetchRooms() {
+      // 1. Liste des rooms qu'on veut TOUJOURS voir (même si vides)
+      const defaultRooms = [
+        { id: 'general', name: 'Général 💬' },
+        { id: 'sport', name: 'Sport ⚽' },
+        { id: 'music', name: 'Musique 🎵' },
+        { id: 'tech', name: 'Tech 💻' },
+        { id: 'gaming', name: 'Gaming 🎮' }
+      ];
+
       try {
-        console.log("🔍 Je demande la liste des rooms au serveur API...");
-        
-        // On fait une requête HTTP classique (GET) vers l'API du prof
+        console.log("🔍 Récupération des rooms...");
         const response = await fetch('https://api.tools.gavago.fr/api/rooms');
         const json = await response.json();
         
-        // Debug : Affiche la réponse brute dans la console (F12) pour vérifier
-        console.log("📦 Réponse reçue :", json);
+        console.log("📦 Réponse API :", json);
 
-        // Si l'API nous renvoie des données (json.data existe)
+        let serverRooms: Room[] = [];
+
         if (json.data) {
-           // On transforme l'objet bizarre du serveur en une liste propre pour nous
-           this.rooms = Object.keys(json.data).map(key => ({
+           // On récupère les rooms actives du serveur
+           serverRooms = Object.keys(json.data).map(key => ({
              id: key,
              name: key 
            }));
-        } else {
-           // CAS DE SECOURS : Si l'API est vide ou buggée, on force des rooms par défaut
-           // pour que l'utilisateur ne se retrouve pas bloqué.
-           this.rooms = [
-             { id: 'general', name: 'general' },
-             { id: 'sport', name: 'sport' },
-             { id: 'tech', name: 'tech' }
-           ];
         }
+
+        // 2. FUSION INTELLIGENTE
+        // On prend nos rooms par défaut + celles du serveur qui ne sont pas déjà dans la liste
+        const mergedRooms = [...defaultRooms];
+
+        serverRooms.forEach(srvRoom => {
+          // Si la room serveur n'est pas déjà dans nos défauts, on l'ajoute
+          const exists = mergedRooms.some(r => r.id === srvRoom.id);
+          if (!exists) {
+            mergedRooms.push(srvRoom);
+          }
+        });
+
+        this.rooms = mergedRooms;
+
       } catch (e) {
-        console.error("❌ Erreur réseau :", e);
-        // En cas de panne internet, on met au moins "general"
-        this.rooms = [{ id: 'general', name: 'general' }];
+        console.error("❌ Erreur chargement rooms, utilisation défauts:", e);
+        this.rooms = defaultRooms;
       }
     },
 

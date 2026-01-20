@@ -2,16 +2,19 @@ import { defineStore } from 'pinia'
 import { useNuxtApp } from '#app'
 
 // =================================================================
-// 1. DÉFINITION DES TYPES
+// 1. DÉFINITION DES TYPES (Le Contrat de Données)
 // =================================================================
+// Ces types permettent à TypeScript de vérifier qu'on ne fait pas d'erreurs.
+// C'est essentiel pour la maintenabilité du projet.
+
 export type Message = {
-  id: string;        
-  author: string;    
-  text: string;      // Vide si c'est une image
-  photo?: string;    // Contient le code de l'image (Base64) si c'en est une
-  date: string;      
-  roomId?: string;   
-  isSystem?: boolean; 
+  id: string;        // Identifiant unique (UUID) pour éviter les doublons
+  author: string;    // Le pseudo de l'utilisateur
+  text: string;      // Le contenu textuel (vide si c'est une image)
+  photo?: string;    // Le code Base64 de l'image (optionnel)
+  date: string;      // Date ISO (ex: 2023-10-25T14:00:00Z) pour le tri
+  roomId?: string;   // Pour savoir dans quel salon afficher le message
+  isSystem?: boolean; // Pour les messages administratifs (ex: "Bienvenue")
 }
 
 export type Room = {
@@ -19,22 +22,52 @@ export type Room = {
   name: string;
 }
 
+// =================================================================
+// 2. LE STORE PINIA (Le "Cerveau" de l'application)
+// =================================================================
 export const useChatStore = defineStore('chat', {
   
-  // --- STATE (Mémoire) ---
+  // --- STATE (L'état global) ---
+  // C'est ici que sont stockées les données partagées entre toutes les pages.
   state: () => ({
-    isConnected: false,
-    currentUser: null as { username: string, photo: string } | null,
-    rooms: [] as Room[],
-    messages: {} as Record<string, Message[]>
+    isConnected: false, // Savoir si le lien avec le serveur est actif
+    currentUser: null as { username: string, photo: string } | null, // Profil de l'utilisateur connecté
+    rooms: [] as Room[], // La liste des salons disponibles
+    // Stockage des messages triés par ID de salon.
+    // Ex: messages['sport'] contient tous les messages du sport.
+    messages: {} as Record<string, Message[]> 
   }),
 
   actions: {
     // -----------------------------------------------------------------
-    // ACTION : RECUPERER LES ROOMS
+    // HELPER : RÉPARATEUR D'IMAGE (Fonction Technique)
+    // -----------------------------------------------------------------
+    // PROBLÈME : Le serveur renvoie parfois des images brutes sans l'en-tête "data:image...".
+    // SOLUTION : Cette fonction détecte ces cas et répare le code Base64 pour que le navigateur l'affiche.
+    fixBase64(content: string): string | null {
+      if (!content) return null;
+
+      // Cas 1 : L'image est déjà valide (elle commence par l'étiquette standard)
+      if (content.startsWith('data:image')) {
+        return content;
+      }
+
+      // Cas 2 : C'est du Base64 brut (sans étiquette)
+      // On utilise une heuristique : si c'est très long (>500 chars) et sans espaces, c'est sûrement une image.
+      if (content.length > 500 && !content.includes(' ')) {
+        // CORRECTION : On ajoute manuellement l'en-tête manquant
+        return `data:image/jpeg;base64,${content}`;
+      }
+
+      // Cas 3 : Ce n'est pas une image, c'est du texte normal
+      return null;
+    },
+
+    // -----------------------------------------------------------------
+    // ACTION A : RÉCUPÉRATION DES SALONS (API REST)
     // -----------------------------------------------------------------
     async fetchRooms() {
-      // Liste de secours
+      // Liste de secours (Fallback) si le serveur est en panne
       const defaultRooms = [
         { id: 'general', name: 'Général 💬' },
         { id: 'sport', name: 'Sport ⚽' },
@@ -43,16 +76,18 @@ export const useChatStore = defineStore('chat', {
       ];
 
       try {
-        // On tente de joindre l'API
+        // Appel à l'API pour récupérer les salons actifs
         const response = await fetch('https://api.tools.gavago.fr/socketio/api/rooms');
         const json = await response.json();
         
         let serverRooms: Room[] = [];
         if (json.success && json.data) {
+           // Transformation de l'objet API en tableau utilisable
            serverRooms = Object.keys(json.data).map(key => ({ id: key, name: key }));
         }
 
-        // On fusionne sans doublons
+        // FUSION INTELLIGENTE :
+        // On garde nos salons par défaut + ceux du serveur, en évitant les doublons d'ID.
         const mergedRooms = [...defaultRooms];
         serverRooms.forEach(srvRoom => {
           if (!mergedRooms.some(r => r.id === srvRoom.id)) mergedRooms.push(srvRoom);
@@ -61,126 +96,160 @@ export const useChatStore = defineStore('chat', {
         this.rooms = mergedRooms;
 
       } catch (e) {
-        console.error("⚠️ Erreur API Rooms, repli sur défauts.");
+        console.error("⚠️ Erreur API Rooms, utilisation de la liste par défaut.");
         this.rooms = defaultRooms;
       }
     },
 
+    // Enregistre l'utilisateur dans le store (appelé depuis la page Login)
     setUser(username: string, photo: string) {
       this.currentUser = { username, photo }
     },
 
     // -----------------------------------------------------------------
-    // ACTION : CONNEXION (C'est ici que tout se joue pour les doublons)
+    // ACTION B : CHARGEMENT DE L'HISTORIQUE (REST API)
+    // -----------------------------------------------------------------
+    // Permet de voir les messages envoyés AVANT notre connexion.
+    async fetchHistory(roomId: string) {
+      // On initialise le tableau si vide
+      if (!this.messages[roomId]) this.messages[roomId] = [];
+
+      try {
+        console.log(`📜 Récupération historique pour : ${roomId}`);
+        const response = await fetch(`https://api.tools.gavago.fr/socketio/api/messages/${roomId}`);
+        
+        if (response.ok) {
+          const json = await response.json();
+          if (json.success && Array.isArray(json.data)) {
+            // On injecte chaque ancien message dans notre système de traitement
+            json.data.forEach((msg: any) => {
+               this.processIncomingMessage(msg, roomId);
+            });
+            console.log(`✅ ${json.data.length} messages d'historique chargés.`);
+          }
+        }
+      } catch (e) {
+        console.warn("Historique non disponible (API down ou vide).");
+      }
+    },
+
+    // -----------------------------------------------------------------
+    // ACTION C : CONNEXION SOCKET.IO (Le cœur du Temps Réel)
     // -----------------------------------------------------------------
     connectToServer(roomName: string = 'general') {
       const { $socket } = useNuxtApp()
       const myPseudo = this.currentUser?.username || 'Anonyme'
 
-      // ÉTAPE 1 : NETTOYAGE DRASTIQUE (ANTI-DOUBLON)
-      // On supprime TOUS les écouteurs précédents sur 'chat-msg'.
-      // Si on ne fait pas ça, à chaque fois que tu changes de page, 
-      // un nouvel écouteur s'ajoute et tu reçois les messages en double/triple.
+      // 1. On charge d'abord l'historique via l'API REST
+      this.fetchHistory(roomName);
+
+      // 2. NETTOYAGE (CRITIQUE POUR ÉVITER LES DOUBLONS)
+      // Avant de créer une nouvelle connexion, on supprime TOUS les anciens écouteurs.
+      // Si on oublie ça, changer de page crée des écouteurs "fantômes" qui reçoivent les messages en double.
       $socket.off('chat-msg'); 
       $socket.off('connect');
 
-      // ÉTAPE 2 : CONNEXION
+      // 3. Connexion au serveur WebSocket
       if (!$socket.connected) {
         $socket.connect();
       }
 
-      // On rejoint la salle
+      // 4. On rejoint la "Room" spécifique
       $socket.emit('chat-join-room', { pseudo: myPseudo, roomName });
       this.isConnected = true;
 
-      // ÉTAPE 3 : ÉCOUTE UNIQUE DES MESSAGES
+      // 5. On écoute les nouveaux messages entrants
       $socket.on('chat-msg', (msg: any) => {
-         // On traite le message reçu
+         // On délègue le traitement complexe à une fonction dédiée
          this.processIncomingMessage(msg, roomName);
       });
     },
 
     // -----------------------------------------------------------------
-    // FONCTION : TRAITEMENT INTELLIGENT DU MESSAGE
+    // FONCTION : TRAITEMENT DU MESSAGE REÇU
     // -----------------------------------------------------------------
-    processIncomingMessage(msg: any, currentRoomName: string) {
-       // On ignore les infos techniques
+    processIncomingMessage(msg: any, defaultRoomId: string) {
+       // On filtre les messages techniques du serveur
        if (msg.categorie === 'INFO') return;
 
-       // --- CORRECTION IMAGE ---
-       // On regarde le contenu. Si ça commence par "data:image", C'EST UNE IMAGE.
-       // Peu importe ce que dit le serveur (qui se trompe parfois).
-       const content = msg.content || '';
-       const isImage = msg.categorie === 'NEW_IMAGE' || content.startsWith('data:image');
+       // DÉTECTION IMAGE : On utilise notre réparateur (fixBase64)
+       const validPhoto = this.fixBase64(msg.content);
        
+       // Si fixBase64 renvoie quelque chose, c'est une image valide
+       const isImage = validPhoto !== null || msg.categorie === 'NEW_IMAGE';
+       
+       // On normalise le message pour notre application
        const formattedMsg: Message = {
-          id: msg.id || Math.random().toString(36),
+          id: msg.id || Math.random().toString(36), // ID de secours
           author: msg.pseudo || msg.userId || 'Inconnu',
           
-          // Si c'est une image, on VIDE le texte (pour ne pas voir le code bizarre)
-          text: isImage ? '' : content, 
+          // Si c'est une image, on force le texte à vide pour l'esthétique
+          text: isImage ? '' : msg.content, 
           
-          // Si c'est une image, on remplit la variable photo
-          photo: isImage ? content : undefined,
+          // Si c'est une image, on stocke le code Base64 corrigé
+          photo: validPhoto || undefined,
           
           date: msg.dateEmis || new Date().toISOString(),
-          roomId: msg.roomName || currentRoomName,
+          roomId: msg.roomName || defaultRoomId,
           isSystem: false
        }
 
+       // On passe à l'étape de stockage
        this.addMessageToStore(formattedMsg);
     },
 
-    deleteMessage(roomId: string, messageId: string) {
-      if (this.messages[roomId]) {
-        // On filtre la liste pour enlever le message ciblé
-        this.messages[roomId] = this.messages[roomId].filter(m => m.id !== messageId);
-      }
-    },
-
     // -----------------------------------------------------------------
-    // ACTION : ENVOYER (SANS AJOUT LOCAL)
+    // ACTION : ENVOI DE MESSAGE
     // -----------------------------------------------------------------
     sendMessage(roomId: string, text: string, photo: string | null = null) {
       const { $socket } = useNuxtApp()
-      
-      // On envoie soit la photo, soit le texte
+      // On envoie soit le texte, soit la photo
       const content = photo || text; 
 
       if (this.isConnected) {
         $socket.emit('chat-msg', { content, roomName: roomId })
       }
       
-      // ⛔️ IMPORTANT : ON N'AJOUTE RIEN DANS LA LISTE ICI !
-      // On attend que le serveur nous renvoie le message via 'chat-msg'.
-      // C'est la seule façon d'être sûr à 100% de ne pas avoir de doublons.
+      // STRATÉGIE "SERVER AUTHORITY" :
+      // On n'ajoute PAS le message localement ici (`this.messages.push`).
+      // On attend que le serveur nous le renvoie via l'événement 'chat-msg'.
+      // C'est la méthode la plus sûre pour garantir que tout le monde voit la même chose (synchronisation).
     },
 
     // -----------------------------------------------------------------
-    // FONCTION : STOCKAGE DANS LA LISTE
+    // FONCTION : STOCKAGE SÉCURISÉ
     // -----------------------------------------------------------------
     addMessageToStore(msg: Message) {
       const roomId = msg.roomId || 'general'
       
-      // Création de la liste si elle n'existe pas
+      // Création du tableau s'il n'existe pas
       if (!this.messages[roomId]) this.messages[roomId] = []
       
-      // 🛡️ SÉCURITÉ ULTIME ANTI-DOUBLON 🛡️
-      // On vérifie si ce message précis (même ID) est déjà là.
+      // FILTRE ANTI-DOUBLON FINAL :
+      // On vérifie si l'ID du message existe déjà dans la liste.
       const exists = this.messages[roomId].some(m => m.id === msg.id);
-      if (exists) return; // Si oui, poubelle.
+      if (exists) return; // Si oui, on rejette le message.
 
       // Ajout
       this.messages[roomId].push(msg);
 
-      // Limite mémoire (50 derniers messages)
+      // Tri chronologique (le plus vieux en haut, le plus récent en bas)
+      this.messages[roomId].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+      // GARBAGE COLLECTION (Gestion mémoire) :
+      // On ne garde que les 50 derniers messages pour ne pas ralentir le téléphone.
       if (this.messages[roomId].length > 50) {
          this.messages[roomId] = this.messages[roomId].slice(-50);
       }
-      
-      // Notification (seulement si ce n'est pas moi)
-      if (msg.author !== this.currentUser?.username) {
-        if (typeof navigator !== 'undefined' && navigator.vibrate) try{ navigator.vibrate(200); }catch(e){}
+    },
+
+    // -----------------------------------------------------------------
+    // ACTION : SUPPRESSION (Pour la Galerie)
+    // -----------------------------------------------------------------
+    deleteMessage(roomId: string, messageId: string) {
+      if (this.messages[roomId]) {
+        // On recrée la liste en excluant le message ciblé
+        this.messages[roomId] = this.messages[roomId].filter(m => m.id !== messageId);
       }
     }
   }

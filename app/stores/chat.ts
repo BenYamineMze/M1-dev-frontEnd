@@ -131,6 +131,13 @@ export const useChatStore = defineStore('chat', {
        this.addMessageToStore(formattedMsg);
     },
 
+    deleteMessage(roomId: string, messageId: string) {
+      if (this.messages[roomId]) {
+        // On filtre la liste pour enlever le message ciblé
+        this.messages[roomId] = this.messages[roomId].filter(m => m.id !== messageId);
+      }
+    },
+
     // -----------------------------------------------------------------
     // ACTION : ENVOYER (SANS AJOUT LOCAL)
     // -----------------------------------------------------------------

@@ -31,6 +31,8 @@ jobs:
           key: ${{ secrets.VPS_KEY }}
           source: ".output/"
           target: "/var/www/chat-pwa"
+          rm: true   # <--- (Nettoie avant de copier)
+          timeout: "60s"
 
       - name: Restart Application
         uses: appleboy/ssh-action@master

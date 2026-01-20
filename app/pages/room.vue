@@ -1,312 +1,232 @@
 <template>
-  <div class="chat-layout">
-    
+  <div class="chat-container">
     <header class="chat-header">
-      <button class="btn-icon" @click="leaveRoom">⬅️</button>
-      
+      <button class="btn-back" @click="goBack">⬅</button>
       <div class="room-info">
-        <h2># {{ currentRoomId }}</h2>
-        <span class="status-dot"></span> <small>En ligne</small>
+        <h2>{{ currentRoomName }}</h2>
+        <span class="status-dot"></span>
       </div>
-
-      <div class="header-actions">
-        <button class="btn-icon" @click="goToGallery">🖼️</button>
+      <div class="user-avatar-mini">
+        <img :src="currentUserPhoto" alt="Moi" />
       </div>
     </header>
 
-    <div class="messages-container" ref="scrollContainer">
-      <div v-if="roomMessages.length === 0" class="empty-state">
-        <p>👋 C'est le début de la discussion dans <strong>{{ currentRoomId }}</strong>.</p>
+    <div class="messages-area" ref="messagesContainer">
+      <div v-if="messages.length === 0" class="empty-state">
+        👋 Soyez le premier à parler ici !
       </div>
 
-      <template v-for="msg in roomMessages" :key="msg.id">
+      <div 
+        v-for="msg in messages" 
+        :key="msg.id" 
+        class="message-bubble"
+        :class="{ 'my-message': isMe(msg.author) }"
+      >
+        <div class="msg-header" v-if="!isMe(msg.author)">
+          <span class="author-name">{{ msg.author }}</span>
+        </div>
+
+        <div v-if="msg.photo" class="msg-photo">
+          <img :src="msg.photo" alt="Image envoyée" />
+        </div>
+
+        <p v-if="msg.text" class="msg-text">{{ msg.text }}</p>
         
-        <div v-if="msg.isSystem" class="system-message">
-           ℹ️ {{ msg.text }}
-        </div>
-
-        <div 
-          v-else
-          class="message-wrapper"
-          :class="{ 'my-msg': isMe(msg.author) }"
-        >
-          <div v-if="!isMe(msg.author)" class="avatar-mini">
-             {{ msg.author.charAt(0).toUpperCase() }}
-          </div>
-
-          <div class="message-bubble">
-            <div v-if="!isMe(msg.author)" class="author-name">{{ msg.author }}</div>
-
-            <img 
-              v-if="msg.photo" 
-              :src="msg.photo" 
-              class="msg-image" 
-              @click="openImage(msg.photo)"
-            />
-
-            <p v-if="msg.text">{{ msg.text }}</p>
-
-            <span class="timestamp">{{ formatTime(msg.date) }}</span>
-          </div>
-        </div>
-
-      </template>
-    </div>
-
-    <form class="input-area" @submit.prevent="handleSend">
-      <input 
-        ref="fileInput" 
-        type="file" 
-        accept="image/*" 
-        capture="environment" 
-        style="display:none" 
-        @change="handleFileSelect"
-      />
-
-      <button type="button" class="btn-attach" @click="triggerFile">
-        📷
-      </button>
-
-      <input 
-        v-model="textInput" 
-        type="text" 
-        placeholder="Message..." 
-        class="msg-input"
-      />
-
-      <button type="submit" class="btn-send" :disabled="!textInput && !pendingImage">
-        ➤
-      </button>
-    </form>
-
-    <div v-if="pendingImage" class="image-preview-overlay">
-      <div class="preview-card">
-        <img :src="pendingImage" />
-        <div class="preview-actions">
-          <button @click="pendingImage = null">Annuler</button>
-          <button @click="handleSend" class="confirm">Envoyer</button>
-        </div>
+        <span class="msg-date">{{ formatTime(msg.date) }}</span>
       </div>
     </div>
 
+    <div class="input-area">
+      <button class="btn-cam" @click="toggleCam">📸</button>
+      
+      <input 
+        v-model="newMessage" 
+        @keyup.enter="sendMessage"
+        type="text" 
+        placeholder="Écrivez un message..." 
+      />
+      
+      <button class="btn-send" @click="sendMessage">➤</button>
+    </div>
+
+    <div v-if="showCam" class="cam-overlay">
+      <video ref="videoEl" autoplay playsinline></video>
+      <canvas ref="canvasEl" style="display:none"></canvas>
+      <div class="cam-actions">
+        <button class="btn-cancel" @click="stopCam">Annuler</button>
+        <button class="btn-snap" @click="takePhoto"></button>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue';
-import { useRoute, useRouter } from '#app'; // Imports Nuxt
+import { ref, computed, onMounted, onUpdated, onBeforeUnmount, nextTick } from 'vue';
+import { useRoute, useRouter } from '#app';
 import { useChatStore } from '~/stores/chat';
 
 const route = useRoute();
 const router = useRouter();
 const chatStore = useChatStore();
 
-const scrollContainer = ref<HTMLElement | null>(null);
-const fileInput = ref<HTMLInputElement | null>(null);
+// 1. RÉCUPÉRATION DE L'ID DE LA ROOM DEPUIS L'URL
+// Ex: si l'url est /room/sport, roomId = "sport"
+const roomId = computed(() => (route.params.id as string) || 'general');
 
-const textInput = ref('');
-const pendingImage = ref<string | null>(null);
+const newMessage = ref('');
+const messagesContainer = ref<HTMLElement | null>(null);
 
-// 1. Récupération dynamique de la room (ex: /room/sport -> sport)
-// Si l'URL est juste /room/, on met 'general' par défaut
-const currentRoomId = computed(() => (route.params.id as string) || 'general');
+// --- GESTION CAMERA ---
+const showCam = ref(false);
+const videoEl = ref<HTMLVideoElement | null>(null);
+const canvasEl = ref<HTMLCanvasElement | null>(null);
+let stream: MediaStream | null = null;
 
-// 2. Récupération des messages
-const roomMessages = computed(() => {
-  return chatStore.messages[currentRoomId.value] || [];
+// --- COMPUTED ---
+const messages = computed(() => chatStore.messages[roomId.value] || []);
+const currentUserPhoto = computed(() => chatStore.currentUser?.photo || 'https://via.placeholder.com/50');
+const currentRoomName = computed(() => roomId.value.toUpperCase());
+
+// --- LIFECYCLE ---
+onMounted(() => {
+  // SÉCURITÉ : Si l'utilisateur n'a pas de pseudo (refresh page), retour accueil
+  if (!chatStore.currentUser) {
+    router.push('/');
+    return;
+  }
+
+  // IMPORTANT : On dit au serveur "Je rentre dans CETTE room là"
+  chatStore.connectToServer(roomId.value);
+  scrollToBottom();
 });
 
-// --- HELPER FUNCTIONS ---
+onUpdated(() => {
+  scrollToBottom();
+});
 
-function isMe(authorName: string) {
-  return authorName === chatStore.currentUser?.username;
+// --- ACTIONS ---
+function isMe(author: string) {
+  return author === chatStore.currentUser?.username;
 }
 
-function formatTime(isoStr?: string) {
-  if (!isoStr) return '';
-  return new Date(isoStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function formatTime(isoDate: string) {
+  return new Date(isoDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function scrollBottom() {
+function goBack() {
+  router.push('/');
+}
+
+function scrollToBottom() {
   nextTick(() => {
-    if (scrollContainer.value) {
-      scrollContainer.value.scrollTop = scrollContainer.value.scrollHeight;
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
     }
   });
 }
 
-// Scroll auto quand un message arrive
-watch(roomMessages, () => {
-  scrollBottom();
-}, { deep: true });
+// --- ENVOI DE MESSAGE ---
+function sendMessage() {
+  if (!newMessage.value.trim()) return;
 
-// --- ACTIONS ---
-
-function leaveRoom() {
-  router.push('/reception');
+  // C'EST ICI QUE TU AVAIS SÛREMENT LE PROBLÈME
+  // On utilise bien "roomId.value" pour envoyer dans la room actuelle
+  chatStore.sendMessage(roomId.value, newMessage.value);
+  
+  newMessage.value = ''; // On vide le champ
 }
 
-function goToGallery() {
-  router.push('/gallery');
+// --- LOGIQUE CAMERA (Identique à l'accueil) ---
+async function toggleCam() {
+  showCam.value = true;
+  await nextTick();
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    if(videoEl.value) videoEl.value.srcObject = stream;
+  } catch(e) { console.error(e); showCam.value = false; }
 }
 
-function triggerFile() {
-  fileInput.value?.click();
+function stopCam() {
+  if(stream) stream.getTracks().forEach(t => t.stop());
+  showCam.value = false;
 }
 
-function handleFileSelect(e: Event) {
-  const input = e.target as HTMLInputElement;
-  if (input.files && input.files[0]) {
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      pendingImage.value = evt.target?.result as string;
-    };
-    reader.readAsDataURL(input.files[0]);
-  }
+function takePhoto() {
+  if(!videoEl.value || !canvasEl.value) return;
+  const vid = videoEl.value;
+  const cvs = canvasEl.value;
+  cvs.width = vid.videoWidth;
+  cvs.height = vid.videoHeight;
+  cvs.getContext('2d')?.drawImage(vid, 0, 0);
+  
+  // Envoi de la photo
+  const photoBase64 = cvs.toDataURL('image/jpeg', 0.7);
+  chatStore.sendMessage(roomId.value, '', photoBase64); // Texte vide, Photo remplie
+  
+  stopCam();
 }
 
-function handleSend() {
-  if (!textInput.value.trim() && !pendingImage.value) return;
-
-  chatStore.sendMessage(
-    currentRoomId.value, 
-    textInput.value, 
-    pendingImage.value
-  );
-
-  textInput.value = '';
-  pendingImage.value = null;
-  scrollBottom();
-}
-
-function openImage(src: string) {
-  // Optionnel : Ouvrir en grand
-  console.log("Zoom image");
-}
-
-onMounted(() => {
-  chatStore.init();
-  scrollBottom();
+onBeforeUnmount(() => {
+  stopCam();
 });
 </script>
 
 <style scoped>
-/* --- STYLES IDENTIQUES AVEC AJOUT DU SYSTEM-MSG --- */
-
-.chat-layout {
-  display: flex; flex-direction: column; height: 100vh;
-  background-color: #e5ddd5; font-family: sans-serif;
+/* --- STYLE MINIMALISTE & MODERNE --- */
+.chat-container {
+  display: flex; flex-direction: column; height: 100vh; background: #f0f2f5;
 }
 
 .chat-header {
-  height: 60px; background: #075e54; color: white;
-  display: flex; align-items: center; padding: 0 10px;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+  background: white; padding: 15px; display: flex; align-items: center; justify-content: space-between;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.05); z-index: 10;
 }
+.room-info h2 { margin: 0; font-size: 1.2rem; }
+.btn-back { border: none; background: none; font-size: 1.5rem; cursor: pointer; }
+.user-avatar-mini img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid #ddd; }
 
-.room-info { flex-grow: 1; margin-left: 15px; }
-.room-info h2 { margin: 0; font-size: 1.1rem; }
-.btn-icon { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: white; }
-
-.messages-container {
-  flex-grow: 1; overflow-y: auto; padding: 15px;
-  display: flex; flex-direction: column; gap: 5px;
-  /* Fond style WhatsApp */
-  background-image: linear-gradient(#e5ddd5 2px, transparent 2px),
-  linear-gradient(90deg, #e5ddd5 2px, transparent 2px),
-  linear-gradient(rgba(255,255,255,.3) 1px, transparent 1px),
-  linear-gradient(90deg, rgba(255,255,255,.3) 1px, transparent 1px);
-  background-size: 100px 100px, 100px 100px, 20px 20px, 20px 20px;
-  background-position:-2px -2px, -2px -2px, -1px -1px, -1px -1px;
+.messages-area {
+  flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px;
 }
-
-/* --- NOUVEAU STYLE POUR MESSAGES SYSTÈME --- */
-.system-message {
-  text-align: center;
-  font-size: 0.75rem;
-  color: #555;
-  background-color: rgba(255,255,255,0.6);
-  padding: 4px 10px;
-  border-radius: 10px;
-  align-self: center;
-  margin: 5px 0;
-  box-shadow: 0 1px 1px rgba(0,0,0,0.05);
-}
-
-.message-wrapper {
-  display: flex; max-width: 80%; margin-bottom: 2px;
-}
-.message-wrapper.my-msg {
-  align-self: flex-end; flex-direction: row-reverse;
-}
+.empty-state { text-align: center; color: #888; margin-top: 50px; }
 
 .message-bubble {
-  background: white; padding: 8px 10px; border-radius: 8px;
-  box-shadow: 0 1px 1px rgba(0,0,0,0.1);
+  max-width: 75%; padding: 10px 15px; border-radius: 18px; position: relative; font-size: 0.95rem;
+  background: white; align-self: flex-start; box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
-.my-msg .message-bubble { background: #dcf8c6; }
-
-.avatar-mini {
-  width: 30px; height: 30px; background: #ccc; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  margin: 0 8px; font-weight: bold; color: #555; font-size: 0.8rem;
+.my-message {
+  align-self: flex-end; background: #0084ff; color: white; border-bottom-right-radius: 4px;
 }
-
-.author-name {
-  font-size: 0.75rem; font-weight: bold; color: #d35400; margin-bottom: 4px;
-}
-.msg-image {
-  max-width: 100%; border-radius: 6px; margin-bottom: 5px; display: block;
-}
-.timestamp {
-  display: block; font-size: 0.65rem; text-align: right; color: #999;
-}
+.my-message .msg-date { color: rgba(255,255,255,0.8); }
+.msg-photo img { max-width: 100%; border-radius: 10px; margin-top: 5px; }
+.msg-date { font-size: 0.7rem; color: #999; display: block; text-align: right; margin-top: 5px; }
+.author-name { font-size: 0.75rem; color: #666; font-weight: bold; margin-bottom: 4px; display: block; }
 
 .input-area {
-  background: #f0f0f0; padding: 8px; display: flex; gap: 10px; align-items: center;
+  background: white; padding: 10px; display: flex; gap: 10px; align-items: center;
+  border-top: 1px solid #eee;
 }
-.msg-input {
-  flex-grow: 1; padding: 10px; border-radius: 20px; border: 1px solid #ccc; outline: none;
+.input-area input {
+  flex: 1; padding: 12px; border-radius: 20px; border: 1px solid #ddd; outline: none;
 }
-.btn-send {
-  background: #075e54; color: white; border: none;
-  width: 40px; height: 40px; border-radius: 50%; cursor: pointer;
-}
-.btn-send:disabled { background: #ccc; }
-
-.image-preview-overlay {
-  position: fixed; top:0; left:0; right:0; bottom:0;
-  background: rgba(0,0,0,0.8); z-index: 100;
-  display: flex; align-items: center; justify-content: center;
-}
-.preview-card {
-  background: white; padding: 15px; border-radius: 10px; text-align: center; max-width: 90%;
-}
-.preview-card img { max-width: 100%; max-height: 50vh; margin-bottom: 10px; border-radius: 5px;}
-.preview-actions { display: flex; justify-content: space-around; gap: 10px;}
-.preview-actions button { padding: 8px 20px; border:none; border-radius: 5px; cursor: pointer;}
-.confirm { background: #075e54; color: white; }
-
-/* Casse les mots trop longs (ex: "Hahahahaha....") */
-.message-bubble p {
-  word-wrap: break-word; 
-  word-break: break-word; 
-  white-space: pre-wrap;
-  max-width: 100%;
-  margin: 0;
+.btn-send, .btn-cam {
+  background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #0084ff;
 }
 
-/* Force les images à ne jamais dépasser la largeur de la bulle */
-.msg-image {
-  max-width: 100%;       /* Ne dépasse jamais le conteneur */
-  height: auto;          /* Garde le ratio */
-  object-fit: contain;   
-  display: block;
-  border-radius: 8px;
+/* Cam Overlay */
+.cam-overlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: black; z-index: 100;
+  display: flex; flex-direction: column;
 }
-
-/* Assure que le conteneur scroll bien */
-.messages-container {
-  overflow-x: hidden; /* Empêche le scroll horizontal moche */
+.cam-overlay video { width: 100%; flex: 1; object-fit: cover; }
+.cam-actions {
+  height: 100px; display: flex; justify-content: center; align-items: center; gap: 20px;
+  position: absolute; bottom: 20px; width: 100%;
+}
+.btn-snap {
+  width: 70px; height: 70px; border-radius: 50%; background: white; border: 4px solid #ddd;
+}
+.btn-cancel {
+  position: absolute; left: 20px; color: white; background: none; border: none; font-size: 1.2rem;
 }
 </style>

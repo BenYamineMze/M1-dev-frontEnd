@@ -240,8 +240,21 @@ function retake() {
 function login() {
   if (!isFormValid.value) return;
 
+  // --- AJOUT : DEMANDE DE PERMISSION NOTIFICATION ---
+  // On le fait ici car c'est un clic utilisateur (obligatoire pour les navigateurs)
+  if ('Notification' in window && Notification.permission !== 'granted') {
+    Notification.requestPermission().then(permission => {
+      console.log("Permission Notification :", permission);
+    });
+  }
+
+  // 1. Sauvegarde Store
   chatStore.setUser(pseudo.value, avatar.value!);
+  
+  // 2. Connexion Spécifique à la Room choisie
   chatStore.connectToServer(selectedRoom.value);
+
+  // 3. Navigation dynamique
   router.push(`/room/${selectedRoom.value}`);
 }
 

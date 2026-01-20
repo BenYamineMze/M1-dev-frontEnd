@@ -4,8 +4,8 @@ import { useNuxtApp } from '#app'
 export type Message = {
   id: string;
   author: string;
-  text: string;     // Le texte du message
-  photo?: string;   // L'image (Base64)
+  text: string;     
+  photo?: string;   
   date: string;
   roomId?: string;
   isSystem?: boolean;
@@ -25,33 +25,22 @@ export const useChatStore = defineStore('chat', {
   }),
 
   actions: {
-    // --- 1. RÉCUPÉRATION DES ROOMS ---
     async fetchRooms() {
       try {
         const response = await fetch('https://api.tools.gavago.fr/api/rooms');
         const json = await response.json();
-        
         if (json.data) {
-           this.rooms = Object.keys(json.data).map(key => ({
-             id: key,
-             name: key 
-           }));
+           this.rooms = Object.keys(json.data).map(key => ({ id: key, name: key }));
         }
       } catch (e) {
-        console.error("Erreur chargement rooms:", e);
         this.rooms = [{ id: 'general', name: 'Général' }];
       }
     },
 
     setUser(username: string, photo: string) {
       this.currentUser = { username, photo }
-      // On demande la permission de notifier dès la connexion
-      if ('Notification' in window && Notification.permission !== 'granted') {
-        Notification.requestPermission();
-      }
     },
 
-    // --- 2. CONNEXION SOCKET ---
     connectToServer(roomName: string = 'general') {
       const { $socket } = useNuxtApp()
       const myPseudo = this.currentUser?.username || 'Anonyme'
@@ -61,7 +50,7 @@ export const useChatStore = defineStore('chat', {
          return;
       }
 
-      $socket.offAny(); // Nettoyage
+      $socket.offAny(); 
       $socket.connect()
 
       $socket.on('connect', () => {
@@ -69,22 +58,21 @@ export const useChatStore = defineStore('chat', {
         $socket.emit('chat-join-room', { pseudo: myPseudo, roomName })
       })
 
-      $socket.on('erreur', (err: any) => console.error("⛔ API Error:", err));
-
-      // --- RÉCEPTION MESSAGE DU SERVEUR ---
       $socket.on('chat-msg', (msg: any) => {
-         if (msg.categorie === 'INFO') return; // Ignore les infos système
+         if (msg.categorie === 'INFO') return; 
 
-         // CORRECTION IMAGE : Si c'est une image, texte = vide
+         // --- CORRECTION BUG IMAGE "TEXTE LONG" ---
+         // Si le serveur dit que c'est une image, ON VIDE LE TEXTE
          const isImage = msg.categorie === 'NEW_IMAGE';
          
          const formattedMsg: Message = {
             id: msg.id || Math.random().toString(36),
             author: msg.pseudo || msg.userId || 'Inconnu',
             
-            // ICI C'EST IMPORTANT : 
-            // Si c'est une image, on met le texte à vide pour ne pas afficher le code bizarre
+            // ICI : Si c'est une image, text = vide (''). Sinon text = content.
             text: isImage ? '' : msg.content, 
+            
+            // ICI : Si c'est une image, photo = content.
             photo: isImage ? msg.content : undefined,
             
             date: msg.dateEmis || new Date().toISOString(),
@@ -96,23 +84,19 @@ export const useChatStore = defineStore('chat', {
       })
     },
 
-    // --- 3. ENVOI DE MESSAGE ---
     sendMessage(roomId: string, text: string, photo: string | null = null) {
       const { $socket } = useNuxtApp()
-      
-      // Si photo, on l'envoie comme contenu
       const content = photo || text; 
 
       if (this.isConnected) {
-        // Le serveur détectera automatiquement si c'est du base64 (image)
         $socket.emit('chat-msg', { content, roomName: roomId })
       }
       
-      // Ajout local immédiat (Optimistic UI)
+      // Ajout local
       this.handleIncomingMessage({
         id: Math.random().toString(36),
         author: this.currentUser?.username || 'Moi',
-        // CORRECTION LOCAL : Si j'envoie une photo, je ne mets pas de texte
+        // CORRECTION : Si j'envoie une photo, je force le texte à vide
         text: photo ? '' : text, 
         photo: photo || undefined,
         date: new Date().toISOString(),
@@ -120,33 +104,32 @@ export const useChatStore = defineStore('chat', {
       })
     },
 
-    // --- 4. TRAITEMENT & NOTIFICATIONS ---
     handleIncomingMessage(msg: Message) {
       const roomId = msg.roomId || 'general'
       if (!this.messages[roomId]) this.messages[roomId] = []
       
       this.messages[roomId].push(msg)
-
-      // Limite à 30 messages pour éviter le crash
       if (this.messages[roomId].length > 30) {
          this.messages[roomId] = this.messages[roomId].slice(-30);
       }
 
-      // --- GESTION NOTIFICATIONS & VIBRATION ---
-      // On ne notifie que si ce n'est PAS moi qui ai envoyé le message
+      // --- CORRECTION NOTIFICATIONS ---
+      // On ne notifie que si c'est quelqu'un d'autre
       if (msg.author !== this.currentUser?.username) {
         
         // 1. Vibration
-        if (navigator.vibrate) navigator.vibrate(200);
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+            try { navigator.vibrate(200); } catch(e){}
+        }
 
-        // 2. Notification Système (Windows/Android)
-        if ('Notification' in window && Notification.permission === 'granted') {
-           const notifBody = msg.photo ? '📷 A envoyé une photo' : msg.text;
-           
-           new Notification(`Message de ${msg.author}`, {
-             body: notifBody,
-             icon: '/pwa-192x192.png' // Assure-toi d'avoir une icône ou retire cette ligne
-           });
+        // 2. Notification
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+           try {
+               new Notification(`Message de ${msg.author}`, {
+                 body: msg.photo ? '📷 A envoyé une photo' : msg.text,
+                 icon: '/favicon.ico' // Icône par défaut
+               });
+           } catch (e) { console.error("Notif error", e) }
         }
       }
     }

@@ -142,52 +142,91 @@ export const useChatStore = defineStore('chat', {
     // -----------------------------------------------------------------
     // ACTION C : CONNEXION SOCKET.IO (Le cœur du Temps Réel)
     // -----------------------------------------------------------------
+// -----------------------------------------------------------------
+    // ACTION C : CONNEXION SOCKET.IO (CORRIGÉE)
+    // -----------------------------------------------------------------
     connectToServer(roomName: string = 'general') {
       const { $socket } = useNuxtApp()
-      const myPseudo = this.currentUser?.username || 'Anonyme'
-
-      // 1. On charge d'abord l'historique via l'API REST
+      
+      // On charge d'abord l'historique
       this.fetchHistory(roomName);
-
-      // --- NOUVEAU : Chargement de la file d'attente sauvegardée ---
       this.loadQueueFromStorage();
 
-      // 2. NETTOYAGE (CRITIQUE POUR ÉVITER LES DOUBLONS)
-      // Avant de créer une nouvelle connexion, on supprime TOUS les anciens écouteurs.
-      // Si on oublie ça, changer de page crée des écouteurs "fantômes" qui reçoivent les messages en double.
+      // Nettoyage
       $socket.off('chat-msg'); 
       $socket.off('connect');
-      $socket.off('disconnect'); // Ajout important pour gérer l'état offline
+      $socket.off('disconnect');
 
-      // 3. Connexion au serveur WebSocket
-      if (!$socket.connected) {
-        $socket.connect();
-      }
+      if (!$socket.connected) $socket.connect();
 
-      // --- GESTION DES ÉVÉNEMENTS DE CONNEXION ---
-      
+      // --- CORRECTION 1 : GESTION DU PSEUDO À LA RECONNEXION ---
       $socket.on('connect', () => {
         console.log("🟢 Connecté au serveur !");
         this.isConnected = true;
         
-        // On rejoint la room
-        $socket.emit('chat-join-room', { pseudo: myPseudo, roomName });
+        // IMPORTANT : On récupère le pseudo ACTUEL du state (et pas une vieille variable)
+        const currentPseudo = this.currentUser?.username || 'Anonyme';
         
-        // --- NOUVEAU : DÉCLENCHEUR DE SYNCHRONISATION ---
-        // Dès qu'on a internet, on envoie tout ce qui était bloqué
+        // On se ré-identifie auprès du serveur
+        $socket.emit('chat-join-room', { pseudo: currentPseudo, roomName });
+        
+        // On vide la file d'attente
         this.processOfflineQueue();
       });
 
       $socket.on('disconnect', () => {
-        console.log("🔴 Déconnecté du serveur.");
         this.isConnected = false;
       });
 
-      // 5. On écoute les nouveaux messages entrants
       $socket.on('chat-msg', (msg: any) => {
-         // On délègue le traitement complexe à une fonction dédiée
          this.processIncomingMessage(msg, roomName);
       });
+    },
+
+    // ... (Garde processIncomingMessage et sendMessage tels quels) ...
+
+    // -----------------------------------------------------------------
+    // FONCTION : STOCKAGE SÉCURISÉ (CORRIGÉE ANTI-DOUBLON OFFLINE)
+    // -----------------------------------------------------------------
+    addMessageToStore(msg: Message) {
+      const roomId = msg.roomId || 'general'
+      
+      if (!this.messages[roomId]) this.messages[roomId] = []
+      
+      // --- CORRECTION 2 : FUSION INTELLIGENTE ---
+      // Si le message entrant n'est PAS "pending" (donc il vient du serveur),
+      // on regarde si on a déjà un message local identique en attente.
+      
+      if (!msg.pending) {
+        const pendingIndex = this.messages[roomId].findIndex(m => 
+          m.pending === true &&             // C'est un message en attente
+          m.text === msg.text &&            // Même contenu
+          m.author === msg.author           // Même auteur
+        );
+
+        if (pendingIndex !== -1) {
+          // BINGO ! C'est le retour de notre propre message.
+          // On REMPLACE le message temporaire par le message officiel du serveur.
+          // Comme ça, l'icône "horloge" disparaît et on n'a pas de doublon.
+          this.messages[roomId][pendingIndex] = msg;
+          
+          // On force le tri pour être sûr
+          this.messages[roomId].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+          return; 
+        }
+      }
+
+      // Vérification classique par ID (pour éviter les doublons normaux)
+      const exists = this.messages[roomId].some(m => m.id === msg.id);
+      if (exists) return; 
+
+      // Ajout normal
+      this.messages[roomId].push(msg);
+      this.messages[roomId].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+      if (this.messages[roomId].length > 50) {
+         this.messages[roomId] = this.messages[roomId].slice(-50);
+      }
     },
 
     // -----------------------------------------------------------------

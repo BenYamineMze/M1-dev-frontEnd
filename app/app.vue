@@ -17,6 +17,7 @@ const chatStore = useChatStore();
 const handleOnline = () => {
   console.log("🌐 Réseau détecté !");
   // On force la reconnexion, ce qui déclenchera processOfflineQueue()
+  // test
   chatStore.connectToServer();
 };
 
